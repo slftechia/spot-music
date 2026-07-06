@@ -97,6 +97,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
+      <div id="yt-player-host" className="fixed w-px h-px opacity-0 pointer-events-none -z-50" aria-hidden />
       <Sidebar current={view} onChange={setView} />
 
       <main className="flex-1 overflow-y-auto pb-36 md:pb-24">
