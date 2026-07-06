@@ -8,6 +8,8 @@ import SearchView from './components/SearchView';
 import LibraryView from './components/LibraryView';
 import { usePlayer } from './hooks/usePlayer';
 import { useInstallPrompt } from './hooks/useInstallPrompt';
+import { useAppUpdate } from './hooks/useAppUpdate';
+import UpdateBanner from './components/UpdateBanner';
 import {
   downloadTrack,
   getAllDownloads,
@@ -25,6 +27,7 @@ export default function App() {
 
   const player = usePlayer();
   const install = useInstallPrompt();
+  const appUpdate = useAppUpdate();
 
   const refreshDownloads = useCallback(async () => {
     const downloads = await getAllDownloads();
@@ -118,6 +121,9 @@ export default function App() {
       />
 
       <main className="flex-1 overflow-y-auto pb-36 md:pb-24">
+        {appUpdate.updateReady && (
+          <UpdateBanner onRefresh={appUpdate.refresh} onDismiss={appUpdate.dismiss} />
+        )}
         {!online && (
           <div className="sticky top-0 z-30 bg-amber-900/90 text-amber-100 text-center text-sm py-2 px-4">
             Modo offline — apenas músicas baixadas podem ser reproduzidas

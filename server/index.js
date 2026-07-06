@@ -115,7 +115,21 @@ app.get('/api/stream/:id', async (req, res) => {
 });
 
 if (existsSync(distPath)) {
-  app.use(express.static(distPath, { index: false }));
+  app.use(
+    express.static(distPath, {
+      index: false,
+      setHeaders(res, filePath) {
+        if (
+          filePath.endsWith('sw.js') ||
+          filePath.endsWith('index.html') ||
+          filePath.endsWith('manifest.webmanifest') ||
+          filePath.endsWith('registerSW.js')
+        ) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+      },
+    })
+  );
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
     res.sendFile(join(distPath, 'index.html'));
