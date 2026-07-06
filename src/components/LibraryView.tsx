@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Download, Loader2, WifiOff } from 'lucide-react';
 import TrackList from './TrackList';
+import LibrarySync from './LibrarySync';
 import { getAllDownloads, removeDownload } from '../services/offlineStorage';
+import { isMobileDevice } from '../utils/device';
 import type { MediaItem } from '../types';
 
 interface Props {
@@ -49,6 +51,8 @@ export default function LibraryView({
         </div>
       </div>
 
+      <LibrarySync trackCount={tracks.length} onImported={onRefresh} />
+
       {loading ? (
         <div className="flex justify-center py-12">
           <Loader2 className="animate-spin text-spotify-green" size={32} />
@@ -57,8 +61,10 @@ export default function LibraryView({
         <div className="text-center py-16">
           <Download size={48} className="mx-auto text-spotify-light mb-4 opacity-50" />
           <p className="text-spotify-light">Nenhuma música baixada ainda.</p>
-          <p className="text-sm text-spotify-light mt-1">
-            Busque músicas e clique no ícone de download.
+          <p className="text-sm text-spotify-light mt-1 max-w-sm mx-auto">
+            {isMobileDevice()
+              ? 'Importe a biblioteca exportada do PC acima, ou baixe músicas curtas se a conexão permitir.'
+              : 'Baixe músicas aqui ou importe um .zip do outro dispositivo.'}
           </p>
         </div>
       ) : (

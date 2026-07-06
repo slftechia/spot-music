@@ -17,6 +17,7 @@ import {
 } from './services/offlineStorage';
 import type { MediaItem, View } from './types';
 import { needsPlaylistOpen, downloadBlockedReason } from './services/api';
+import { isMobileDevice } from './utils/device';
 
 export default function App() {
   const [view, setView] = useState<View>('home');
@@ -88,7 +89,9 @@ export default function App() {
       console.error(err);
       const msg = err instanceof Error && err.message === 'DOWNLOAD_TOO_LONG'
         ? downloadBlockedReason(item)
-        : 'Erro ao baixar. Verifique a conexão e tente novamente.';
+        : isMobileDevice()
+          ? 'Download falhou no celular. Baixe no PC, exporte a biblioteca e importe aqui na aba Biblioteca.'
+          : 'Erro ao baixar. Rode o app no PC (npm run dev:all) ou tente outra música.';
       alert(msg);
     } finally {
       setDownloadingId(null);

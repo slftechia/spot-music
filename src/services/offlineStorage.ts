@@ -133,6 +133,21 @@ export async function getAllDownloads(): Promise<DownloadedTrack[]> {
     .map((e) => buildDownloaded(e.track, e.audioBlob));
 }
 
+export async function getRawDownloads() {
+  const db = await getDB();
+  const entries = await db.getAll('downloads');
+  return entries.sort((a, b) => b.downloadedAt - a.downloadedAt);
+}
+
+export async function importDownloadEntry(
+  track: MediaItem,
+  audioBlob: Blob,
+  downloadedAt = Date.now()
+) {
+  const db = await getDB();
+  await db.put('downloads', { track, audioBlob, downloadedAt });
+}
+
 export async function removeDownload(id: string) {
   const db = await getDB();
   const entry = await db.get('downloads', id);
