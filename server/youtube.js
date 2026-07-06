@@ -1,16 +1,32 @@
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { existsSync } from 'fs';
 import { create } from 'youtube-dl-exec';
 import { Innertube } from 'youtubei.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ytdlp = create(
-  process.platform === 'win32'
+const ytdlpBinary =
+  process.env.YTDLP_PATH ||
+  (process.platform === 'win32'
     ? join(root, 'node_modules/youtube-dl-exec/bin/yt-dlp.exe')
-    : join(root, 'node_modules/youtube-dl-exec/bin/yt-dlp')
-);
+    : join(root, 'node_modules/youtube-dl-exec/bin/yt-dlp'));
+
+const ytdlp = create(ytdlpBinary);
+
+function baseYtdlpOpts() {
+  const opts = {
+    noWarnings: true,
+    noCheckCertificates: true,
+    remoteComponents: 'ejs:github',
+  };
+  const cookiesPath = process.env.YOUTUBE_COOKIES_PATH;
+  if (cookiesPath && existsSync(cookiesPath)) {
+    opts.cookies = cookiesPath;
+  }
+  return opts;
+}
 
 let innertube = null;
 
@@ -178,13 +194,9 @@ const URL_TTL_MS = 5 * 60 * 60 * 1000;
 const urlCache = new Map();
 const inflight = new Map();
 
-const YTDLP_OPTS = {
-  noWarnings: true,
-  noCheckCertificates: true,
-  extractorArgs: 'youtube:player_client=android,web',
-};
 
 const CLIENT_FALLBACKS = [
+  'youtube:player_client=android,web;player_skip=webpage,configs',
   'youtube:player_client=android,web',
   'youtube:player_client=ios',
   'youtube:player_client=tv_embedded',
@@ -195,8 +207,7 @@ async function resolveWithGetUrl(videoUrl) {
   for (const extractorArgs of CLIENT_FALLBACKS) {
     try {
       const raw = await ytdlp(videoUrl, {
-        noWarnings: true,
-        noCheckCertificates: true,
+        ...baseYtdlpOpts(),
         extractorArgs,
         format: 'bestaudio[ext=m4a]/bestaudio/best',
         getUrl: true,
@@ -212,7 +223,8 @@ async function resolveWithGetUrl(videoUrl) {
 
 async function resolveWithJson(videoUrl) {
   const info = await ytdlp(videoUrl, {
-    ...YTDLP_OPTS,
+    ...baseYtdlpOpts(),
+    extractorArgs: CLIENT_FALLBACKS[0],
     format: 'bestaudio/best',
     dumpSingleJson: true,
     skipDownload: true,
@@ -228,6 +240,30 @@ async function resolveWithJson(videoUrl) {
   throw new Error('Nenhum formato de áudio no JSON');
 }
 
+async function resolveWithInvidious(videoId) {
+  const listRes = await fetch('https://api.invidious.io/instances.json?sort_by=health');
+  const instances = await listRes.json();
+
+  for (const [host, meta] of instances.slice(0, 8)) {
+    const base = meta?.uri || `https://${host}`;
+    try {
+      const res = await fetch(`${base}/api/v1/videos/${videoId}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SpotMusic/1.0)' },
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const audio = (data.adaptiveFormats || [])
+        .filter((f) => f.type?.includes('audio') && f.url)
+        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+      if (audio?.url) return audio.url;
+    } catch {
+      continue;
+    }
+  }
+  throw new Error('Invidious indisponível');
+}
+
 export async function getStreamUrl(videoId) {
   const cached = urlCache.get(videoId);
   if (cached && cached.expires > Date.now()) return cached.url;
@@ -240,7 +276,11 @@ export async function getStreamUrl(videoId) {
     try {
       streamUrl = await resolveWithGetUrl(videoUrl);
     } catch {
-      streamUrl = await resolveWithJson(videoUrl);
+      try {
+        streamUrl = await resolveWithJson(videoUrl);
+      } catch {
+        streamUrl = await resolveWithInvidious(videoId);
+      }
     }
     urlCache.set(videoId, { url: streamUrl, expires: Date.now() + URL_TTL_MS });
     return streamUrl;
@@ -258,7 +298,7 @@ export async function prepareStream(videoId) {
 
 export async function getPlaylistItems(playlistId) {
   const data = await ytdlp(`https://www.youtube.com/playlist?list=${playlistId}`, {
-    ...YTDLP_OPTS,
+    ...baseYtdlpOpts(),
     flatPlaylist: true,
     dumpSingleJson: true,
     skipDownload: true,
