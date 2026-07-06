@@ -80,7 +80,11 @@ export default function SearchView({
   return (
     <div className="flex flex-col gap-6">
       <h2 className="text-2xl font-bold">Buscar</h2>
-      <SearchBar onSearch={(q) => handleSearch(q)} placeholder="Sertanejo 2026, mix, playlist..." />
+      <SearchBar
+        onSearch={(q) => handleSearch(q)}
+        placeholder="Sertanejo 2026, mix, playlist..."
+        initialQuery={initialQuery}
+      />
 
       {(searched || loading) && (
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">

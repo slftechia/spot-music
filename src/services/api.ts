@@ -4,6 +4,13 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 export const MAX_DOWNLOAD_SECONDS = 20 * 60;
 export const DOWNLOADS_ENABLED = false;
 
+export async function getSearchSuggestions(query: string) {
+  const res = await fetch(`${API_BASE}/suggest?q=${encodeURIComponent(query)}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.data as string[]) || [];
+}
+
 export async function searchMedia(query: string, filter: SearchFilter = 'all') {
   const res = await fetch(
     `${API_BASE}/search?q=${encodeURIComponent(query)}&filter=${filter}`

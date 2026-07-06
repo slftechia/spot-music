@@ -148,13 +148,6 @@ function sortLikeYouTube(items) {
   });
 }
 
-function sortForMobile(items) {
-  const short = items.filter((i) => i.duration > 0 && i.duration <= 480);
-  const medium = items.filter((i) => i.duration > 480 && i.duration <= 1200);
-  const long = items.filter((i) => !i.duration || i.duration > 1200);
-  return [...short, ...medium, ...long].slice(0, 30);
-}
-
 export async function searchYouTube(query, filter = 'all') {
   const yt = await getInnertube();
   const results = await yt.search(query, { type: 'all' });
@@ -180,6 +173,13 @@ export async function searchYouTube(query, filter = 'all') {
   return sortLikeYouTube(items).slice(0, 40);
 }
 
+function sortForMobile(items) {
+  const short = items.filter((i) => i.duration > 0 && i.duration <= 480);
+  const medium = items.filter((i) => i.duration > 480 && i.duration <= 1200);
+  const long = items.filter((i) => !i.duration || i.duration > 1200);
+  return [...short, ...medium, ...long].slice(0, 30);
+}
+
 export async function getTrendingYouTube() {
   const yt = await getInnertube();
   const results = await yt.search('musicas 2026 official', { type: 'video' });
@@ -188,6 +188,14 @@ export async function getTrendingYouTube() {
     if (item.type === 'Video') items.push(mapVideo(item));
   }
   return sortForMobile(items);
+}
+
+export async function getYouTubeSuggestions(query) {
+  const q = String(query || '').trim();
+  if (q.length < 2) return [];
+  const yt = await getInnertube();
+  const suggestions = await yt.getSearchSuggestions(q);
+  return suggestions.slice(0, 10);
 }
 
 const URL_TTL_MS = 5 * 60 * 60 * 1000;

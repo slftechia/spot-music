@@ -7,6 +7,7 @@ import {
   searchYouTube,
   getTrendingYouTube,
   getPlaylistItems,
+  getYouTubeSuggestions,
   proxyStream,
   streamRedirect,
   prepareStream,
@@ -25,6 +26,17 @@ app.use(express.json());
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', source: 'youtube', maxDownloadMin: MAX_DOWNLOAD_SECONDS / 60 });
+});
+
+app.get('/api/suggest', async (req, res) => {
+  try {
+    const query = String(req.query.q || '').trim();
+    if (!query) return res.json({ data: [] });
+    const results = await getYouTubeSuggestions(query);
+    res.json({ data: results });
+  } catch {
+    res.json({ data: [] });
+  }
 });
 
 app.get('/api/search', async (req, res) => {
