@@ -18,9 +18,11 @@ interface Props {
   progress: number;
   duration: number;
   volume: number;
+  isMobile?: boolean;
   onToggle: () => void;
   onSeek: (time: number) => void;
   onVolumeChange: (v: number) => void;
+  onOpenYoutube?: () => void;
 }
 
 export default function Player({
@@ -31,9 +33,11 @@ export default function Player({
   progress,
   duration,
   volume,
+  isMobile,
   onToggle,
   onSeek,
   onVolumeChange,
+  onOpenYoutube,
 }: Props) {
   if (!track) return null;
 
@@ -53,7 +57,17 @@ export default function Player({
         <div className="min-w-0">
           <p className="text-sm font-medium truncate">{track.title}</p>
           <p className="text-xs text-spotify-light truncate">
-            {error || track.artist}
+            {error ? (
+              <button
+                type="button"
+                onClick={onOpenYoutube}
+                className="text-amber-300 underline"
+              >
+                {error} — Abrir no YouTube
+              </button>
+            ) : (
+              track.artist
+            )}
           </p>
         </div>
       </div>
@@ -88,7 +102,8 @@ export default function Player({
             max={displayDuration || 100}
             value={progress}
             onChange={(e) => onSeek(Number(e.target.value))}
-            className="flex-1 h-1 accent-spotify-green cursor-pointer"
+            disabled={isMobile && !isPlaying}
+            className="flex-1 h-1 accent-spotify-green cursor-pointer disabled:opacity-40"
           />
           <span className="text-[10px] text-spotify-light w-10">
             {track.durationText || formatTime(displayDuration, showHours)}

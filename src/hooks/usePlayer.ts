@@ -2,6 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
 import { needsPlaylistOpen } from '../services/api';
 import { getDownloadedTrack } from '../services/offlineStorage';
+import { isMobileDevice } from '../utils/device';
+import {
+  buildEmbedUrl,
+  parseEmbedMessage,
+  sendEmbedCommand,
+  startEmbedListening,
+  YT_STATE,
+} from '../utils/youtubeEmbed';
 
 type YTPlayer = {
   loadVideoById: (id: string) => void;
@@ -11,7 +19,6 @@ type YTPlayer = {
   setVolume: (volume: number) => void;
   getCurrentTime: () => number;
   getDuration: () => number;
-  getPlayerState: () => number;
   destroy: () => void;
 };
 
@@ -23,7 +30,6 @@ declare global {
         opts: {
           height?: string | number;
           width?: string | number;
-          videoId?: string;
           playerVars?: Record<string, string | number>;
           events?: {
             onReady?: () => void;
@@ -38,9 +44,13 @@ declare global {
   }
 }
 
+const MOBILE = isMobileDevice();
+const BUFFERING_TIMEOUT_MS = 12000;
+
 let ytApiPromise: Promise<void> | null = null;
 
 export function loadYouTubeAPI() {
+  if (MOBILE) return Promise.resolve();
   if (ytApiPromise) return ytApiPromise;
   ytApiPromise = new Promise((resolve) => {
     if (window.YT?.Player) {
@@ -61,16 +71,29 @@ export function loadYouTubeAPI() {
   return ytApiPromise;
 }
 
-const BUFFERING_TIMEOUT_MS = 15000;
+function mountMobileEmbed(videoId: string): HTMLIFrameElement | null {
+  const host = document.getElementById('yt-embed-host');
+  if (!host) return null;
+
+  host.replaceChildren();
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
+  iframe.setAttribute('allowfullscreen', 'true');
+  iframe.title = 'YouTube player';
+  iframe.className = 'absolute inset-0 w-full h-full border-0';
+  iframe.src = buildEmbedUrl(videoId, true);
+  host.appendChild(iframe);
+  return iframe;
+}
 
 export function usePlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ytRef = useRef<YTPlayer | null>(null);
+  const embedIframeRef = useRef<HTMLIFrameElement | null>(null);
   const ytReady = useRef(false);
-  const modeRef = useRef<'youtube' | 'audio'>('youtube');
+  const modeRef = useRef<'youtube' | 'youtube-embed' | 'audio'>('youtube');
   const tickRef = useRef<number | null>(null);
-  const pendingVideoId = useRef<string | null>(null);
-  const needsGesturePlay = useRef(false);
+  const volumeRef = useRef(80);
 
   const [currentTrack, setCurrentTrack] = useState<MediaItem | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -87,7 +110,7 @@ export function usePlayer() {
     }
   }, []);
 
-  const startTick = useCallback(() => {
+  const startDesktopTick = useCallback(() => {
     stopTick();
     const loop = () => {
       if (modeRef.current === 'youtube' && ytRef.current) {
@@ -101,17 +124,52 @@ export function usePlayer() {
     tickRef.current = requestAnimationFrame(loop);
   }, [stopTick]);
 
-  const playYoutubeNow = useCallback((videoId: string) => {
-    if (!ytRef.current || !ytReady.current) {
-      pendingVideoId.current = videoId;
-      needsGesturePlay.current = true;
-      return false;
-    }
-    ytRef.current.loadVideoById(videoId);
-    ytRef.current.playVideo();
-    needsGesturePlay.current = false;
-    return true;
-  }, []);
+  const handleEmbedState = useCallback(
+    (state: number) => {
+      if (modeRef.current !== 'youtube-embed') return;
+
+      if (state === YT_STATE.PLAYING) {
+        setIsPlaying(true);
+        setIsBuffering(false);
+        setError(null);
+      } else if (state === YT_STATE.PAUSED) {
+        setIsPlaying(false);
+        setIsBuffering(false);
+      } else if (state === YT_STATE.BUFFERING) {
+        setIsBuffering(true);
+      } else if (state === YT_STATE.ENDED) {
+        setIsPlaying(false);
+        setIsBuffering(false);
+      } else if (state === YT_STATE.CUED) {
+        setIsBuffering(false);
+      }
+    },
+    []
+  );
+
+  const handleEmbedMessage = useCallback(
+    (event: MessageEvent) => {
+      if (event.origin !== 'https://www.youtube.com') return;
+      const data = parseEmbedMessage(event.data);
+      if (!data?.info) return;
+
+      if (data.info.playerState !== undefined) {
+        handleEmbedState(data.info.playerState);
+      }
+      if (typeof data.info.currentTime === 'number' && isFinite(data.info.currentTime)) {
+        setProgress(data.info.currentTime);
+      }
+      if (typeof data.info.duration === 'number' && data.info.duration > 0) {
+        setDuration(data.info.duration);
+      }
+    },
+    [handleEmbedState]
+  );
+
+  useEffect(() => {
+    window.addEventListener('message', handleEmbedMessage);
+    return () => window.removeEventListener('message', handleEmbedMessage);
+  }, [handleEmbedMessage]);
 
   useEffect(() => {
     const audio = new Audio();
@@ -136,14 +194,10 @@ export function usePlayer() {
       if (modeRef.current === 'audio') {
         setIsPlaying(true);
         setIsBuffering(false);
-        startTick();
       }
     };
     const onPause = () => {
-      if (modeRef.current === 'audio') {
-        setIsPlaying(false);
-        stopTick();
-      }
+      if (modeRef.current === 'audio') setIsPlaying(false);
     };
     const onWaiting = () => {
       if (modeRef.current === 'audio') setIsBuffering(true);
@@ -168,68 +222,59 @@ export function usePlayer() {
     audio.addEventListener('canplay', onCanPlay);
     audio.addEventListener('error', onError);
 
-    loadYouTubeAPI().then(() => {
-      const host = document.getElementById('yt-player-host');
-      if (!host || ytRef.current) return;
+    if (!MOBILE) {
+      loadYouTubeAPI().then(() => {
+        const host = document.getElementById('yt-player-host');
+        if (!host || ytRef.current) return;
 
-      ytRef.current = new window.YT!.Player(host, {
-        height: 200,
-        width: 300,
-        playerVars: {
-          playsinline: 1,
-          controls: 0,
-          modestbranding: 1,
-          rel: 0,
-          origin: window.location.origin,
-          enablejsapi: 1,
-        },
-        events: {
-          onReady: () => {
-            ytReady.current = true;
-            ytRef.current?.setVolume(volume);
-            const pending = pendingVideoId.current;
-            if (pending) {
-              pendingVideoId.current = null;
-              ytRef.current?.loadVideoById(pending);
-              if (!needsGesturePlay.current) {
-                ytRef.current?.playVideo();
-              } else {
+        ytRef.current = new window.YT!.Player(host, {
+          height: 200,
+          width: 300,
+          playerVars: {
+            playsinline: 1,
+            controls: 0,
+            modestbranding: 1,
+            rel: 0,
+            origin: window.location.origin,
+            enablejsapi: 1,
+          },
+          events: {
+            onReady: () => {
+              ytReady.current = true;
+              ytRef.current?.setVolume(volumeRef.current);
+            },
+            onStateChange: (e) => {
+              if (modeRef.current !== 'youtube') return;
+              const PS = window.YT!.PlayerState;
+              if (e.data === PS.PLAYING) {
+                setIsPlaying(true);
                 setIsBuffering(false);
-                setError('Toque play para iniciar');
+                setError(null);
+                startDesktopTick();
+              } else if (e.data === PS.PAUSED) {
+                setIsPlaying(false);
+                stopTick();
+              } else if (e.data === PS.BUFFERING) {
+                setIsBuffering(true);
+              } else if (e.data === PS.ENDED) {
+                setIsPlaying(false);
+                setIsBuffering(false);
+                stopTick();
+              } else if (e.data === PS.CUED) {
+                setIsBuffering(false);
               }
-            }
+            },
+            onError: () => {
+              if (modeRef.current === 'youtube') {
+                setError('Vídeo indisponível. Tente outra música.');
+                setIsBuffering(false);
+                setIsPlaying(false);
+              }
+            },
           },
-          onStateChange: (e) => {
-            if (modeRef.current !== 'youtube') return;
-            const PS = window.YT!.PlayerState;
-            if (e.data === PS.PLAYING) {
-              setIsPlaying(true);
-              setIsBuffering(false);
-              setError(null);
-              startTick();
-            } else if (e.data === PS.PAUSED) {
-              setIsPlaying(false);
-              stopTick();
-            } else if (e.data === PS.BUFFERING) {
-              setIsBuffering(true);
-            } else if (e.data === PS.ENDED) {
-              setIsPlaying(false);
-              setIsBuffering(false);
-              stopTick();
-            } else if (e.data === PS.CUED) {
-              setIsBuffering(false);
-            }
-          },
-          onError: () => {
-            if (modeRef.current === 'youtube') {
-              setError('Vídeo indisponível. Tente outra música.');
-              setIsBuffering(false);
-              setIsPlaying(false);
-            }
-          },
-        },
+        });
       });
-    });
+    }
 
     return () => {
       stopTick();
@@ -239,81 +284,140 @@ export function usePlayer() {
       ytRef.current = null;
       ytReady.current = false;
     };
-  }, [startTick, stopTick, volume]);
+  }, [startDesktopTick, stopTick]);
 
   useEffect(() => {
-    if (modeRef.current === 'youtube') ytRef.current?.setVolume(volume);
-    else if (audioRef.current) audioRef.current.volume = volume / 100;
+    volumeRef.current = volume;
+    if (modeRef.current === 'youtube') {
+      ytRef.current?.setVolume(volume);
+    } else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
+      sendEmbedCommand(embedIframeRef.current, 'setVolume', [volume]);
+    } else if (audioRef.current) {
+      audioRef.current.volume = volume / 100;
+    }
   }, [volume]);
 
   useEffect(() => {
     if (!isBuffering || isPlaying) return;
     const timer = setTimeout(() => {
       setIsBuffering(false);
-      setError('Não iniciou. Toque no botão play novamente.');
+      setError('Não iniciou. Toque play de novo ou abra no YouTube.');
     }, BUFFERING_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, [isBuffering, isPlaying, currentTrack?.id]);
 
-  const play = useCallback((item: MediaItem, offline = false) => {
-    if (needsPlaylistOpen(item)) return;
+  const playDesktopYoutube = useCallback((videoId: string) => {
+    if (!ytRef.current || !ytReady.current) {
+      setError('Player carregando. Toque de novo.');
+      setIsBuffering(false);
+      return;
+    }
+    ytRef.current.loadVideoById(videoId);
+    ytRef.current.playVideo();
+  }, []);
 
-    if (currentTrack?.id === item.id) {
-      if (isPlaying) {
-        if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
-        else audioRef.current?.pause();
-      } else if (modeRef.current === 'youtube') {
-        ytRef.current?.playVideo();
-        setIsBuffering(true);
-        setError(null);
-      } else {
-        audioRef.current?.play();
-      }
+  const playMobileYoutube = useCallback((videoId: string) => {
+    const iframe = mountMobileEmbed(videoId);
+    if (!iframe) {
+      setError('Erro ao iniciar player.');
+      setIsBuffering(false);
       return;
     }
 
-    setCurrentTrack(item);
-    setProgress(0);
-    setDuration(item.duration || 0);
-    setIsBuffering(true);
-    setIsPlaying(false);
-    setError(null);
+    embedIframeRef.current = iframe;
+    iframe.addEventListener('load', () => {
+      startEmbedListening(iframe);
+      sendEmbedCommand(iframe, 'setVolume', [volumeRef.current]);
+      sendEmbedCommand(iframe, 'playVideo');
+      setIsBuffering(false);
+      setIsPlaying(true);
+    });
+  }, []);
 
-    if (offline) {
-      modeRef.current = 'audio';
-      ytRef.current?.pauseVideo();
-      void (async () => {
-        try {
-          const downloaded = await getDownloadedTrack(item.id);
-          if (!downloaded?.blobUrl) throw new Error('offline');
-          const audio = audioRef.current!;
-          audio.src = downloaded.blobUrl;
-          audio.load();
-          await audio.play();
-        } catch {
-          setIsBuffering(false);
-          setIsPlaying(false);
-          setError('Faixa não encontrada offline.');
+  const play = useCallback(
+    (item: MediaItem, offline = false) => {
+      if (needsPlaylistOpen(item)) return;
+
+      if (currentTrack?.id === item.id) {
+        if (isPlaying) {
+          if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
+          else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
+            sendEmbedCommand(embedIframeRef.current, 'pauseVideo');
+          } else audioRef.current?.pause();
+        } else if (modeRef.current === 'youtube') {
+          ytRef.current?.playVideo();
+          setIsBuffering(true);
+          setError(null);
+        } else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
+          sendEmbedCommand(embedIframeRef.current, 'playVideo');
+          setIsPlaying(true);
+          setError(null);
+        } else {
+          audioRef.current?.play();
         }
-      })();
-      return;
-    }
+        return;
+      }
 
-    modeRef.current = 'youtube';
-    audioRef.current?.pause();
-    loadYouTubeAPI();
-    playYoutubeNow(item.id);
-  }, [currentTrack, isPlaying, playYoutubeNow]);
+      setCurrentTrack(item);
+      setProgress(0);
+      setDuration(item.duration || 0);
+      setIsBuffering(true);
+      setIsPlaying(false);
+      setError(null);
+
+      if (offline) {
+        modeRef.current = 'audio';
+        ytRef.current?.pauseVideo();
+        if (embedIframeRef.current) {
+          embedIframeRef.current.remove();
+          embedIframeRef.current = null;
+        }
+        void (async () => {
+          try {
+            const downloaded = await getDownloadedTrack(item.id);
+            if (!downloaded?.blobUrl) throw new Error('offline');
+            const audio = audioRef.current!;
+            audio.src = downloaded.blobUrl;
+            audio.load();
+            await audio.play();
+          } catch {
+            setIsBuffering(false);
+            setIsPlaying(false);
+            setError('Faixa não encontrada offline.');
+          }
+        })();
+        return;
+      }
+
+      audioRef.current?.pause();
+
+      if (MOBILE) {
+        modeRef.current = 'youtube-embed';
+        playMobileYoutube(item.id);
+        return;
+      }
+
+      modeRef.current = 'youtube';
+      playDesktopYoutube(item.id);
+    },
+    [currentTrack, isPlaying, playDesktopYoutube, playMobileYoutube]
+  );
 
   const pause = useCallback(() => {
     if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
-    else audioRef.current?.pause();
+    else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
+      sendEmbedCommand(embedIframeRef.current, 'pauseVideo');
+    } else audioRef.current?.pause();
   }, []);
 
   const seek = useCallback((time: number) => {
     setProgress(time);
     if (modeRef.current === 'youtube') ytRef.current?.seekTo(time, true);
-    else if (audioRef.current) audioRef.current.currentTime = time;
+    else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
+      sendEmbedCommand(embedIframeRef.current, 'seekTo', [time, true]);
+    } else if (audioRef.current) {
+      audioRef.current.currentTime = time;
+    }
   }, []);
 
   const toggle = useCallback(() => {
@@ -326,15 +430,23 @@ export function usePlayer() {
       ytRef.current?.playVideo();
       setIsBuffering(true);
       setError(null);
+    } else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
+      sendEmbedCommand(embedIframeRef.current, 'playVideo');
+      setIsPlaying(true);
+      setError(null);
     } else {
       audioRef.current?.play();
     }
   }, [currentTrack, isPlaying, pause]);
 
   const setVolumeLevel = useCallback((v: number) => {
-    const vol = Math.round(v * 100);
-    setVolume(vol);
+    setVolume(Math.round(v * 100));
   }, []);
+
+  const openInYoutube = useCallback(() => {
+    if (!currentTrack) return;
+    window.open(`https://www.youtube.com/watch?v=${currentTrack.id}`, '_blank', 'noopener');
+  }, [currentTrack]);
 
   return {
     currentTrack,
@@ -344,11 +456,13 @@ export function usePlayer() {
     progress,
     duration,
     volume: volume / 100,
+    isMobile: MOBILE,
     setVolume: setVolumeLevel,
     play,
     pause,
     seek,
     toggle,
+    openInYoutube,
   };
 }
 

@@ -98,8 +98,13 @@ export default function App() {
   return (
     <div className="flex h-screen overflow-hidden">
       <div
+        id="yt-embed-host"
+        className="fixed bottom-[76px] left-3 w-16 h-10 z-40 overflow-hidden rounded opacity-[0.02] pointer-events-none md:hidden"
+        aria-hidden
+      />
+      <div
         id="yt-player-host"
-        className="fixed -left-[9999px] top-0 w-[300px] h-[200px] opacity-0 pointer-events-none"
+        className="hidden md:block fixed -left-[9999px] top-0 w-[300px] h-[200px] opacity-0 pointer-events-none"
         aria-hidden
       />
       <Sidebar current={view} onChange={setView} />
@@ -158,9 +163,11 @@ export default function App() {
         progress={player.progress}
         duration={player.duration}
         volume={player.volume}
+        isMobile={player.isMobile}
         onToggle={player.toggle}
         onSeek={player.seek}
         onVolumeChange={player.setVolume}
+        onOpenYoutube={player.openInYoutube}
       />
     </div>
   );
