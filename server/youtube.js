@@ -180,19 +180,34 @@ const inflight = new Map();
 
 const YTDLP_OPTS = {
   noWarnings: true,
-  noCallHome: true,
   noCheckCertificates: true,
+  extractorArgs: 'youtube:player_client=android,web',
 };
 
+const CLIENT_FALLBACKS = [
+  'youtube:player_client=android,web',
+  'youtube:player_client=ios',
+  'youtube:player_client=tv_embedded',
+];
+
 async function resolveWithGetUrl(videoUrl) {
-  const raw = await ytdlp(videoUrl, {
-    ...YTDLP_OPTS,
-    format: 'bestaudio[ext=m4a]/bestaudio/best',
-    getUrl: true,
-  });
-  const trimmed = String(raw ?? '').trim();
-  if (trimmed.startsWith('http')) return trimmed;
-  throw new Error('yt-dlp getUrl retornou vazio');
+  let lastErr;
+  for (const extractorArgs of CLIENT_FALLBACKS) {
+    try {
+      const raw = await ytdlp(videoUrl, {
+        noWarnings: true,
+        noCheckCertificates: true,
+        extractorArgs,
+        format: 'bestaudio[ext=m4a]/bestaudio/best',
+        getUrl: true,
+      });
+      const trimmed = String(raw ?? '').trim();
+      if (trimmed.startsWith('http')) return trimmed;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('yt-dlp getUrl falhou');
 }
 
 async function resolveWithJson(videoUrl) {
