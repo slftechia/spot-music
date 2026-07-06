@@ -14,6 +14,7 @@ interface Props {
   isPlaying?: boolean;
   onPlay: (item: MediaItem) => void;
   onDownload: (item: MediaItem) => void;
+  onCancelDownload?: () => void;
   onSearchNavigate: (query: string) => void;
 }
 
@@ -25,6 +26,7 @@ export default function HomeView({
   isPlaying,
   onPlay,
   onDownload,
+  onCancelDownload,
   onSearchNavigate,
 }: Props) {
   const [items, setItems] = useState<MediaItem[]>([]);
@@ -57,6 +59,7 @@ export default function HomeView({
         onClose={() => setOpenPlaylist(null)}
         onPlay={onPlay}
         onDownload={onDownload}
+        onCancelDownload={onCancelDownload}
       />
     );
   }
@@ -95,6 +98,7 @@ export default function HomeView({
             onPlay={onPlay}
             onOpenPlaylist={setOpenPlaylist}
             onDownload={onDownload}
+            onCancelDownload={onCancelDownload}
           />
         )}
       </section>

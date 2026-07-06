@@ -14,6 +14,7 @@ interface Props {
   onClose: () => void;
   onPlay: (item: MediaItem) => void;
   onDownload: (item: MediaItem) => void;
+  onCancelDownload?: () => void;
 }
 
 export default function PlaylistView({
@@ -26,6 +27,7 @@ export default function PlaylistView({
   onClose,
   onPlay,
   onDownload,
+  onCancelDownload,
 }: Props) {
   const [items, setItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,6 +85,7 @@ export default function PlaylistView({
           downloadProgress={downloadProgress}
           onPlay={onPlay}
           onDownload={onDownload}
+          onCancelDownload={onCancelDownload}
         />
       )}
     </div>

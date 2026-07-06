@@ -12,6 +12,7 @@ import { useAppUpdate } from './hooks/useAppUpdate';
 import UpdateBanner from './components/UpdateBanner';
 import {
   downloadTrack,
+  cancelActiveDownload,
   getAllDownloads,
 } from './services/offlineStorage';
 import type { MediaItem, View } from './types';
@@ -83,15 +84,20 @@ export default function App() {
       await downloadTrack(item, setDownloadProgress);
       await refreshDownloads();
     } catch (err) {
+      if (err instanceof Error && err.message === 'DOWNLOAD_CANCELLED') return;
       console.error(err);
       const msg = err instanceof Error && err.message === 'DOWNLOAD_TOO_LONG'
         ? downloadBlockedReason(item)
-        : 'Erro ao baixar. Tente uma música mais curta (até 20 min).';
+        : 'Erro ao baixar. Verifique a conexão e tente novamente.';
       alert(msg);
     } finally {
       setDownloadingId(null);
       setDownloadProgress(0);
     }
+  };
+
+  const handleCancelDownload = () => {
+    cancelActiveDownload();
   };
 
   const [pendingSearch, setPendingSearch] = useState<string | undefined>();
@@ -140,6 +146,7 @@ export default function App() {
               isPlaying={player.isPlaying}
               onPlay={handlePlay}
               onDownload={handleDownload}
+              onCancelDownload={handleCancelDownload}
               onSearchNavigate={handleSearchNavigate}
             />
           )}
@@ -153,6 +160,7 @@ export default function App() {
               initialQuery={pendingSearch}
               onPlay={handlePlay}
               onDownload={handleDownload}
+              onCancelDownload={handleCancelDownload}
             />
           )}
           {view === 'library' && (

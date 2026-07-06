@@ -1,7 +1,7 @@
-import { Download, Loader2, Play, Trash2 } from 'lucide-react';
+import { Download, Play, Trash2, X } from 'lucide-react';
 import type { MediaItem } from '../types';
 import { formatTime } from '../hooks/usePlayer';
-import { prefetchStream, canDownload } from '../services/api';
+import { prefetchStream, canDownload, MAX_DOWNLOAD_SECONDS } from '../services/api';
 
 interface Props {
   tracks: MediaItem[];
@@ -13,6 +13,7 @@ interface Props {
   showRemove?: boolean;
   onPlay: (item: MediaItem) => void;
   onDownload: (item: MediaItem) => void;
+  onCancelDownload?: () => void;
   onRemove?: (item: MediaItem) => void;
 }
 
@@ -26,6 +27,7 @@ export default function TrackList({
   showRemove,
   onPlay,
   onDownload,
+  onCancelDownload,
   onRemove,
 }: Props) {
   if (tracks.length === 0) {
@@ -98,10 +100,18 @@ export default function TrackList({
 
             <div className="flex flex-col items-center shrink-0 min-w-[44px]">
               {downloading ? (
-                <div className="flex items-center gap-1 text-spotify-green text-xs">
-                  <Loader2 size={16} className="animate-spin" />
-                  {downloadProgress !== undefined && <span>{downloadProgress}%</span>}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => onCancelDownload?.()}
+                  className="flex flex-col items-center gap-0.5 p-2 text-red-400 hover:text-red-300 transition-colors"
+                  title="Cancelar download"
+                  aria-label="Cancelar download"
+                >
+                  <X size={18} />
+                  <span className="text-[9px] font-medium">
+                    {downloadProgress !== undefined ? `${downloadProgress}%` : '…'}
+                  </span>
+                </button>
               ) : downloaded ? (
                 showRemove ? (
                   <button
@@ -119,7 +129,7 @@ export default function TrackList({
                   onClick={() => onDownload(track)}
                   disabled={!canDownload(track)}
                   className="flex flex-col items-center gap-0.5 p-2 text-spotify-light hover:text-white transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-30"
-                  title={canDownload(track) ? 'Baixar para offline' : 'Máx. 20 min'}
+                  title={canDownload(track) ? 'Baixar para offline' : `Máx. ${Math.round(MAX_DOWNLOAD_SECONDS / 3600)}h`}
                   aria-label="Baixar música"
                 >
                   <Download size={18} />

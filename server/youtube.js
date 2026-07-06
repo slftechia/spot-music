@@ -396,4 +396,4 @@ export async function proxyStream(videoId, req, res) {
   }
 }
 
-export const MAX_DOWNLOAD_SECONDS = 20 * 60;
+export const MAX_DOWNLOAD_SECONDS = 3 * 60 * 60;

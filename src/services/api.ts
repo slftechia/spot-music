@@ -1,7 +1,7 @@
 import type { MediaItem, SearchFilter } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
-export const MAX_DOWNLOAD_SECONDS = 20 * 60;
+export const MAX_DOWNLOAD_SECONDS = 3 * 60 * 60;
 export const DOWNLOADS_ENABLED = true;
 
 export async function getSearchSuggestions(query: string) {
@@ -64,8 +64,8 @@ export function canDownload(item: MediaItem) {
 
 export function downloadBlockedReason(item: MediaItem) {
   if (!canDownload(item)) {
-    const min = Math.round(MAX_DOWNLOAD_SECONDS / 60);
-    return `Muito longo para baixar (máx. ${min} min). Ouça online.`;
+    const hours = Math.round(MAX_DOWNLOAD_SECONDS / 3600);
+    return `Muito longo para baixar (máx. ${hours}h). Ouça online.`;
   }
   return null;
 }

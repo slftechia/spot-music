@@ -15,8 +15,10 @@ interface SpotMusicDB extends DBSchema {
 
 const DB_NAME = 'spot-music-offline';
 const DB_VERSION = 1;
+const DOWNLOAD_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 
 let dbPromise: Promise<IDBPDatabase<SpotMusicDB>> | null = null;
+let activeDownload: { id: string; controller: AbortController } | null = null;
 
 function getDB() {
   if (!dbPromise) {
@@ -31,6 +33,14 @@ function getDB() {
   return dbPromise;
 }
 
+export function cancelActiveDownload() {
+  activeDownload?.controller.abort();
+}
+
+export function getActiveDownloadId() {
+  return activeDownload?.id ?? null;
+}
+
 export async function downloadTrack(
   track: MediaItem,
   onProgress?: (pct: number) => void
@@ -43,7 +53,8 @@ export async function downloadTrack(
   if (existing) return existing;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000);
+  activeDownload = { id: track.id, controller };
+  const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
 
   try {
     const res = await fetch(getDownloadUrl(track), { signal: controller.signal });
@@ -53,6 +64,7 @@ export async function downloadTrack(
     const reader = res.body?.getReader();
     if (!reader) {
       const blob = await res.blob();
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       await saveDownload(track, blob);
       return buildDownloaded(track, blob);
     }
@@ -68,15 +80,24 @@ export async function downloadTrack(
       if (contentLength && onProgress) {
         onProgress(Math.round((received / contentLength) * 100));
       } else if (onProgress && received > 0) {
-        onProgress(Math.min(99, Math.round(received / 500000)));
+        onProgress(Math.min(99, Math.round(received / 2_000_000)));
       }
     }
 
+    if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
     const blob = new Blob(chunks as BlobPart[], { type: 'audio/mp4' });
     await saveDownload(track, blob);
+    onProgress?.(100);
     return buildDownloaded(track, blob);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('DOWNLOAD_CANCELLED');
+    }
+    throw err;
   } finally {
     clearTimeout(timeout);
+    if (activeDownload?.id === track.id) activeDownload = null;
   }
 }
 

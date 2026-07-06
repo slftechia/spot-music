@@ -16,6 +16,7 @@ interface Props {
   initialQuery?: string;
   onPlay: (item: MediaItem) => void;
   onDownload: (item: MediaItem) => void;
+  onCancelDownload?: () => void;
 }
 
 const FILTERS: SearchFilter[] = ['all', 'videos', 'compilations', 'playlists', 'albums'];
@@ -29,6 +30,7 @@ export default function SearchView({
   initialQuery,
   onPlay,
   onDownload,
+  onCancelDownload,
 }: Props) {
   const [items, setItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -73,6 +75,7 @@ export default function SearchView({
         onClose={() => setOpenPlaylist(null)}
         onPlay={onPlay}
         onDownload={onDownload}
+        onCancelDownload={onCancelDownload}
       />
     );
   }
@@ -125,6 +128,7 @@ export default function SearchView({
             onPlay={onPlay}
             onOpenPlaylist={setOpenPlaylist}
             onDownload={onDownload}
+            onCancelDownload={onCancelDownload}
           />
         </>
       )}
