@@ -96,6 +96,10 @@ if (existsSync(distPath)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Spot Music rodando na porta ${PORT}${isProd ? ' (produção)' : ''}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Spot Music rodando na porta ${PORT}${isProd ? ' (produção)' : ''}`);
+  });
+}
+
+export default app;
