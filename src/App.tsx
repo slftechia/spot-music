@@ -111,7 +111,7 @@ export default function App() {
     <div className="flex h-screen overflow-hidden">
       <div
         id="yt-embed-host"
-        className="fixed bottom-[76px] left-3 w-16 h-10 z-40 overflow-hidden rounded opacity-[0.02] pointer-events-none md:hidden"
+        className="fixed bottom-[122px] left-3 w-16 h-10 z-40 overflow-hidden rounded opacity-[0.02] pointer-events-none md:hidden"
         aria-hidden
       />
       <div
@@ -126,7 +126,7 @@ export default function App() {
         onInstall={install.install}
       />
 
-      <main className="flex-1 overflow-y-auto pb-36 md:pb-24">
+      <main className="flex-1 overflow-y-auto pb-44 md:pb-24">
         {appUpdate.updateReady && (
           <UpdateBanner onRefresh={appUpdate.refresh} onDismiss={appUpdate.dismiss} />
         )}
@@ -202,6 +202,8 @@ export default function App() {
         isMobile={player.isMobile}
         onToggle={player.toggle}
         onSeek={player.seek}
+        onSeekStart={player.seekStart}
+        onSeekEnd={player.seekEnd}
         onVolumeChange={player.setVolume}
         onOpenYoutube={player.openInYoutube}
       />

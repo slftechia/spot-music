@@ -94,6 +94,8 @@ export function usePlayer() {
   const modeRef = useRef<'youtube' | 'youtube-embed' | 'audio'>('youtube');
   const tickRef = useRef<number | null>(null);
   const volumeRef = useRef(80);
+  const progressLockUntil = useRef(0);
+  const embedPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [currentTrack, setCurrentTrack] = useState<MediaItem | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -102,6 +104,23 @@ export function usePlayer() {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(80);
+
+  const stopEmbedPoll = useCallback(() => {
+    if (embedPollRef.current) {
+      clearInterval(embedPollRef.current);
+      embedPollRef.current = null;
+    }
+  }, []);
+
+  const startEmbedPoll = useCallback(() => {
+    stopEmbedPoll();
+    embedPollRef.current = setInterval(() => {
+      if (modeRef.current !== 'youtube-embed' || !embedIframeRef.current) return;
+      if (Date.now() < progressLockUntil.current) return;
+      sendEmbedCommand(embedIframeRef.current, 'getCurrentTime');
+      sendEmbedCommand(embedIframeRef.current, 'getDuration');
+    }, 1000);
+  }, [stopEmbedPoll]);
 
   const stopTick = useCallback(() => {
     if (tickRef.current) {
@@ -116,7 +135,7 @@ export function usePlayer() {
       if (modeRef.current === 'youtube' && ytRef.current) {
         const t = ytRef.current.getCurrentTime();
         const d = ytRef.current.getDuration();
-        if (isFinite(t)) setProgress(t);
+        if (isFinite(t) && Date.now() > progressLockUntil.current) setProgress(t);
         if (isFinite(d) && d > 0) setDuration(d);
       }
       tickRef.current = requestAnimationFrame(loop);
@@ -132,19 +151,22 @@ export function usePlayer() {
         setIsPlaying(true);
         setIsBuffering(false);
         setError(null);
+        startEmbedPoll();
       } else if (state === YT_STATE.PAUSED) {
         setIsPlaying(false);
         setIsBuffering(false);
+        stopEmbedPoll();
       } else if (state === YT_STATE.BUFFERING) {
         setIsBuffering(true);
       } else if (state === YT_STATE.ENDED) {
         setIsPlaying(false);
         setIsBuffering(false);
+        stopEmbedPoll();
       } else if (state === YT_STATE.CUED) {
         setIsBuffering(false);
       }
     },
-    []
+    [startEmbedPoll, stopEmbedPoll]
   );
 
   const handleEmbedMessage = useCallback(
@@ -157,7 +179,9 @@ export function usePlayer() {
         handleEmbedState(data.info.playerState);
       }
       if (typeof data.info.currentTime === 'number' && isFinite(data.info.currentTime)) {
-        setProgress(data.info.currentTime);
+        if (Date.now() > progressLockUntil.current) {
+          setProgress(data.info.currentTime);
+        }
       }
       if (typeof data.info.duration === 'number' && data.info.duration > 0) {
         setDuration(data.info.duration);
@@ -278,13 +302,14 @@ export function usePlayer() {
 
     return () => {
       stopTick();
+      stopEmbedPoll();
       audio.pause();
       audio.src = '';
       ytRef.current?.destroy();
       ytRef.current = null;
       ytReady.current = false;
     };
-  }, [startDesktopTick, stopTick]);
+  }, [startDesktopTick, stopTick, stopEmbedPoll]);
 
   useEffect(() => {
     volumeRef.current = volume;
@@ -331,8 +356,9 @@ export function usePlayer() {
       sendEmbedCommand(iframe, 'playVideo');
       setIsBuffering(false);
       setIsPlaying(true);
+      startEmbedPoll();
     });
-  }, []);
+  }, [startEmbedPoll]);
 
   const play = useCallback(
     (item: MediaItem, offline = false) => {
@@ -410,7 +436,12 @@ export function usePlayer() {
     } else audioRef.current?.pause();
   }, []);
 
+  const lockProgress = useCallback((ms = 2500) => {
+    progressLockUntil.current = Date.now() + ms;
+  }, []);
+
   const seek = useCallback((time: number) => {
+    lockProgress();
     setProgress(time);
     if (modeRef.current === 'youtube') ytRef.current?.seekTo(time, true);
     else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
@@ -418,7 +449,15 @@ export function usePlayer() {
     } else if (audioRef.current) {
       audioRef.current.currentTime = time;
     }
-  }, []);
+  }, [lockProgress]);
+
+  const seekStart = useCallback(() => {
+    lockProgress(60000);
+  }, [lockProgress]);
+
+  const seekEnd = useCallback(() => {
+    lockProgress(2500);
+  }, [lockProgress]);
 
   const toggle = useCallback(() => {
     if (!currentTrack) return;
@@ -461,6 +500,8 @@ export function usePlayer() {
     play,
     pause,
     seek,
+    seekStart,
+    seekEnd,
     toggle,
     openInYoutube,
   };

@@ -16,7 +16,7 @@ const items: { id: View; label: string; icon: typeof Home }[] = [
 
 export default function MobileNav({ current, onChange, showInstall, onInstall }: Props) {
   return (
-    <nav className="md:hidden fixed bottom-[72px] left-0 right-0 z-40 flex justify-around bg-spotify-dark border-t border-white/10 py-1.5 px-1">
+    <nav className="md:hidden fixed bottom-[118px] left-0 right-0 z-40 flex justify-around bg-spotify-dark border-t border-white/10 py-1.5 px-1">
       {items.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
