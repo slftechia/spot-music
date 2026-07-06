@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #535353 transparent;
+}
+
+body {
+  @apply bg-spotify-black text-white antialiased;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+@keyframes pulse-bar {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+
+.animate-bar {
+  animation: pulse-bar 0.8s ease-in-out infinite;
+}

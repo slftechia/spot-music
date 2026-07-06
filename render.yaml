@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: spot-music
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: NODE_ENV=production node server/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
