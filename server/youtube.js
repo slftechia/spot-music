@@ -6,9 +6,11 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const ytdlp = create(process.platform === 'win32'
-  ? join(root, 'node_modules/youtube-dl-exec/bin/yt-dlp.exe')
-  : undefined);
+const ytdlp = create(
+  process.platform === 'win32'
+    ? join(root, 'node_modules/youtube-dl-exec/bin/yt-dlp.exe')
+    : join(root, 'node_modules/youtube-dl-exec/bin/yt-dlp')
+);
 
 let innertube = null;
 
@@ -130,6 +132,13 @@ function sortLikeYouTube(items) {
   });
 }
 
+function sortForMobile(items) {
+  const short = items.filter((i) => i.duration > 0 && i.duration <= 480);
+  const medium = items.filter((i) => i.duration > 480 && i.duration <= 1200);
+  const long = items.filter((i) => !i.duration || i.duration > 1200);
+  return [...short, ...medium, ...long].slice(0, 30);
+}
+
 export async function searchYouTube(query, filter = 'all') {
   const yt = await getInnertube();
   const results = await yt.search(query, { type: 'all' });
@@ -156,12 +165,53 @@ export async function searchYouTube(query, filter = 'all') {
 }
 
 export async function getTrendingYouTube() {
-  return searchYouTube('músicas mais tocadas 2026 mix compilação', 'all');
+  const yt = await getInnertube();
+  const results = await yt.search('musicas 2026 official', { type: 'video' });
+  const items = [];
+  for (const item of results.results || []) {
+    if (item.type === 'Video') items.push(mapVideo(item));
+  }
+  return sortForMobile(items);
 }
 
 const URL_TTL_MS = 5 * 60 * 60 * 1000;
 const urlCache = new Map();
 const inflight = new Map();
+
+const YTDLP_OPTS = {
+  noWarnings: true,
+  noCallHome: true,
+  noCheckCertificates: true,
+};
+
+async function resolveWithGetUrl(videoUrl) {
+  const raw = await ytdlp(videoUrl, {
+    ...YTDLP_OPTS,
+    format: 'bestaudio[ext=m4a]/bestaudio/best',
+    getUrl: true,
+  });
+  const trimmed = String(raw ?? '').trim();
+  if (trimmed.startsWith('http')) return trimmed;
+  throw new Error('yt-dlp getUrl retornou vazio');
+}
+
+async function resolveWithJson(videoUrl) {
+  const info = await ytdlp(videoUrl, {
+    ...YTDLP_OPTS,
+    format: 'bestaudio/best',
+    dumpSingleJson: true,
+    skipDownload: true,
+  });
+
+  const candidates = [
+    ...(info.requested_formats || []),
+    ...(info.formats || []),
+  ].filter((f) => f?.url && f.acodec !== 'none' && f.acodec !== 'none');
+
+  candidates.sort((a, b) => (b.abr || 0) - (a.abr || 0));
+  if (candidates[0]?.url) return candidates[0].url;
+  throw new Error('Nenhum formato de áudio no JSON');
+}
 
 export async function getStreamUrl(videoId) {
   const cached = urlCache.get(videoId);
@@ -169,32 +219,31 @@ export async function getStreamUrl(videoId) {
 
   if (inflight.has(videoId)) return inflight.get(videoId);
 
-  const promise = ytdlp(`https://www.youtube.com/watch?v=${videoId}`, {
-    format: 'bestaudio/best',
-    getUrl: true,
-  })
-    .then((url) => {
-      const trimmed = String(url).trim();
-      urlCache.set(videoId, { url: trimmed, expires: Date.now() + URL_TTL_MS });
-      inflight.delete(videoId);
-      return trimmed;
-    })
-    .catch((err) => {
-      inflight.delete(videoId);
-      throw err;
-    });
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const promise = (async () => {
+    let streamUrl;
+    try {
+      streamUrl = await resolveWithGetUrl(videoUrl);
+    } catch {
+      streamUrl = await resolveWithJson(videoUrl);
+    }
+    urlCache.set(videoId, { url: streamUrl, expires: Date.now() + URL_TTL_MS });
+    return streamUrl;
+  })()
+    .finally(() => inflight.delete(videoId));
 
   inflight.set(videoId, promise);
   return promise;
 }
 
 export async function prepareStream(videoId) {
-  await getStreamUrl(videoId);
-  return { ready: true };
+  const url = await getStreamUrl(videoId);
+  return { ready: true, cached: urlCache.has(videoId) };
 }
 
 export async function getPlaylistItems(playlistId) {
   const data = await ytdlp(`https://www.youtube.com/playlist?list=${playlistId}`, {
+    ...YTDLP_OPTS,
     flatPlaylist: true,
     dumpSingleJson: true,
     skipDownload: true,
@@ -229,9 +278,17 @@ function formatSeconds(sec) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/** Redireciona para CDN do YouTube — rápido no mobile */
+export async function streamRedirect(videoId, res) {
+  const streamUrl = await getStreamUrl(videoId);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.redirect(302, streamUrl);
+}
+
+/** Proxy com range — usado só para download */
 export async function proxyStream(videoId, req, res) {
   const streamUrl = await getStreamUrl(videoId);
-  const headers = {};
+  const headers = { 'User-Agent': 'Mozilla/5.0' };
   if (req.headers.range) headers.Range = req.headers.range;
 
   const response = await fetch(streamUrl, { headers });
@@ -249,6 +306,7 @@ export async function proxyStream(videoId, req, res) {
   }
   res.status(response.status);
   res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (!response.body) {
     res.end();
@@ -274,3 +332,5 @@ export async function proxyStream(videoId, req, res) {
     }
   }
 }
+
+export const MAX_DOWNLOAD_SECONDS = 20 * 60;

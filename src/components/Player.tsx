@@ -14,6 +14,7 @@ interface Props {
   track: MediaItem | null;
   isPlaying: boolean;
   isBuffering?: boolean;
+  error?: string | null;
   progress: number;
   duration: number;
   volume: number;
@@ -26,6 +27,7 @@ export default function Player({
   track,
   isPlaying,
   isBuffering,
+  error,
   progress,
   duration,
   volume,
@@ -50,7 +52,9 @@ export default function Player({
         )}
         <div className="min-w-0">
           <p className="text-sm font-medium truncate">{track.title}</p>
-          <p className="text-xs text-spotify-light truncate">{track.artist}</p>
+          <p className="text-xs text-spotify-light truncate">
+            {error || track.artist}
+          </p>
         </div>
       </div>
 

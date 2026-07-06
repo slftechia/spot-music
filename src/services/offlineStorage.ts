@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { DownloadedTrack, MediaItem } from '../types';
-import { getStreamUrl } from './api';
+import { canDownload, getDownloadUrl } from './api';
 
 interface SpotMusicDB extends DBSchema {
   downloads: {
@@ -35,37 +35,49 @@ export async function downloadTrack(
   track: MediaItem,
   onProgress?: (pct: number) => void
 ): Promise<DownloadedTrack> {
+  if (!canDownload(track)) {
+    throw new Error('DOWNLOAD_TOO_LONG');
+  }
+
   const existing = await getDownloadedTrack(track.id);
   if (existing) return existing;
 
-  const streamUrl = getStreamUrl(track);
-  const res = await fetch(streamUrl);
-  if (!res.ok) throw new Error('Falha ao baixar');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000);
 
-  const contentLength = Number(res.headers.get('content-length') || 0);
-  const reader = res.body?.getReader();
-  if (!reader) {
-    const blob = await res.blob();
+  try {
+    const res = await fetch(getDownloadUrl(track), { signal: controller.signal });
+    if (!res.ok) throw new Error('Falha ao baixar');
+
+    const contentLength = Number(res.headers.get('content-length') || 0);
+    const reader = res.body?.getReader();
+    if (!reader) {
+      const blob = await res.blob();
+      await saveDownload(track, blob);
+      return buildDownloaded(track, blob);
+    }
+
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (contentLength && onProgress) {
+        onProgress(Math.round((received / contentLength) * 100));
+      } else if (onProgress && received > 0) {
+        onProgress(Math.min(99, Math.round(received / 500000)));
+      }
+    }
+
+    const blob = new Blob(chunks as BlobPart[], { type: 'audio/mp4' });
     await saveDownload(track, blob);
     return buildDownloaded(track, blob);
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.length;
-    if (contentLength && onProgress) {
-      onProgress(Math.round((received / contentLength) * 100));
-    }
-  }
-
-  const blob = new Blob(chunks as BlobPart[], { type: 'audio/mp4' });
-  await saveDownload(track, blob);
-  return buildDownloaded(track, blob);
 }
 
 async function saveDownload(track: MediaItem, audioBlob: Blob) {

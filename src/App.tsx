@@ -9,10 +9,9 @@ import { usePlayer } from './hooks/usePlayer';
 import {
   downloadTrack,
   getAllDownloads,
-  isDownloaded,
 } from './services/offlineStorage';
 import type { MediaItem, View } from './types';
-import { needsPlaylistOpen } from './services/api';
+import { needsPlaylistOpen, downloadBlockedReason } from './services/api';
 
 export default function App() {
   const [view, setView] = useState<View>('home');
@@ -45,19 +44,15 @@ export default function App() {
     };
   }, []);
 
-  const handlePlay = async (item: MediaItem) => {
+  const handlePlay = (item: MediaItem) => {
     if (needsPlaylistOpen(item)) return;
 
-    const offline = await isDownloaded(item.id);
+    const offline = downloadedIds.has(item.id);
     if (!offline && !online) {
       alert('Sem conexão. Baixe a música primeiro para ouvir offline.');
       return;
     }
-    try {
-      player.play(item, offline);
-    } catch (err) {
-      console.error(err);
-    }
+    player.play(item, offline).catch(() => {});
   };
 
   const handlePlayOffline = (item: MediaItem) => {
@@ -69,6 +64,11 @@ export default function App() {
       alert('Conecte-se à internet para baixar músicas.');
       return;
     }
+    const blocked = downloadBlockedReason(item);
+    if (blocked) {
+      alert(blocked);
+      return;
+    }
     if (downloadedIds.has(item.id)) return;
 
     setDownloadingId(item.id);
@@ -78,7 +78,10 @@ export default function App() {
       await refreshDownloads();
     } catch (err) {
       console.error(err);
-      alert('Erro ao baixar. Tente novamente.');
+      const msg = err instanceof Error && err.message === 'DOWNLOAD_TOO_LONG'
+        ? downloadBlockedReason(item)
+        : 'Erro ao baixar. Tente uma música mais curta (até 20 min).';
+      alert(msg);
     } finally {
       setDownloadingId(null);
       setDownloadProgress(0);
@@ -146,6 +149,7 @@ export default function App() {
         track={player.currentTrack}
         isPlaying={player.isPlaying}
         isBuffering={player.isBuffering}
+        error={player.error}
         progress={player.progress}
         duration={player.duration}
         volume={player.volume}

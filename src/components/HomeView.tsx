@@ -62,7 +62,7 @@ export default function HomeView({
       </section>
 
       <section>
-        <h3 className="text-xl font-bold mb-4">Em alta — compilações e playlists</h3>
+        <h3 className="text-xl font-bold mb-4">Músicas para ouvir agora</h3>
         {loading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="animate-spin text-spotify-green" size={32} />

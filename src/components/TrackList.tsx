@@ -1,7 +1,7 @@
 import { Download, Loader2, Play, Trash2 } from 'lucide-react';
 import type { MediaItem } from '../types';
 import { formatTime } from '../hooks/usePlayer';
-import { prefetchStream } from '../services/api';
+import { prefetchStream, canDownload } from '../services/api';
 
 interface Props {
   tracks: MediaItem[];
@@ -117,8 +117,9 @@ export default function TrackList({
               ) : (
                 <button
                   onClick={() => onDownload(track)}
-                  className="p-2 text-spotify-light hover:text-white transition-colors opacity-0 group-hover:opacity-100"
-                  title="Baixar para offline"
+                  disabled={!canDownload(track)}
+                  className="p-2 text-spotify-light hover:text-white transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-30"
+                  title={canDownload(track) ? 'Baixar para offline' : 'Máx. 20 min'}
                 >
                   <Download size={16} />
                 </button>

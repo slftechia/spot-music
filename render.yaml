@@ -1,10 +1,10 @@
 services:
   - type: web
     name: spot-music
-    runtime: node
+    runtime: docker
     plan: free
-    buildCommand: npm install && npm run build
-    startCommand: NODE_ENV=production node server/index.js
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

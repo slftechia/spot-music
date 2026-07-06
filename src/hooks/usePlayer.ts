@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
-import { getStreamUrl, needsPlaylistOpen, prefetchStream } from '../services/api';
+import { getStreamUrl, needsPlaylistOpen, prepareStream } from '../services/api';
 import { getDownloadedTrack } from '../services/offlineStorage';
 
 export function usePlayer() {
@@ -8,6 +8,7 @@ export function usePlayer() {
   const [currentTrack, setCurrentTrack] = useState<MediaItem | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.8);
@@ -15,6 +16,7 @@ export function usePlayer() {
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'auto';
+    audio.setAttribute('playsinline', 'true');
     audio.volume = volume;
     audioRef.current = audio;
 
@@ -31,12 +33,18 @@ export function usePlayer() {
     const onPlay = () => {
       setIsPlaying(true);
       setIsBuffering(false);
+      setError(null);
     };
     const onPause = () => setIsPlaying(false);
     const onWaiting = () => setIsBuffering(true);
     const onCanPlay = () => setIsBuffering(false);
     const onPlaying = () => setIsBuffering(false);
     const onLoadStart = () => setIsBuffering(true);
+    const onError = () => {
+      setIsBuffering(false);
+      setIsPlaying(false);
+      setError('Não foi possível reproduzir. Tente outra música.');
+    };
 
     audio.addEventListener('timeupdate', onTimeUpdate);
     audio.addEventListener('durationchange', onDurationChange);
@@ -47,6 +55,7 @@ export function usePlayer() {
     audio.addEventListener('canplay', onCanPlay);
     audio.addEventListener('playing', onPlaying);
     audio.addEventListener('loadstart', onLoadStart);
+    audio.addEventListener('error', onError);
 
     return () => {
       audio.pause();
@@ -59,6 +68,7 @@ export function usePlayer() {
       audio.removeEventListener('canplay', onCanPlay);
       audio.removeEventListener('playing', onPlaying);
       audio.removeEventListener('loadstart', onLoadStart);
+      audio.removeEventListener('error', onError);
       audio.src = '';
     };
   }, []);
@@ -66,10 +76,6 @@ export function usePlayer() {
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
-
-  const tryStartPlayback = useCallback((audio: HTMLAudioElement) => {
-    audio.play().catch(() => {});
-  }, []);
 
   const play = useCallback(async (item: MediaItem, offline = false) => {
     if (needsPlaylistOpen(item)) return;
@@ -81,32 +87,40 @@ export function usePlayer() {
       if (isPlaying) {
         audio.pause();
       } else {
-        tryStartPlayback(audio);
+        audio.play().catch(() => setError('Toque novamente para reproduzir.'));
       }
       return;
     }
-
-    if (!offline) prefetchStream(item);
 
     setCurrentTrack(item);
     setProgress(0);
     setDuration(item.duration || 0);
     setIsBuffering(true);
     setIsPlaying(false);
+    setError(null);
 
-    let src: string;
-    if (offline) {
-      const downloaded = await getDownloadedTrack(item.id);
-      if (!downloaded?.blobUrl) throw new Error('Faixa não encontrada offline');
-      src = downloaded.blobUrl;
-    } else {
-      src = getStreamUrl(item);
+    try {
+      let src: string;
+      if (offline) {
+        const downloaded = await getDownloadedTrack(item.id);
+        if (!downloaded?.blobUrl) throw new Error('Faixa não encontrada offline');
+        src = downloaded.blobUrl;
+      } else {
+        await prepareStream(item);
+        src = getStreamUrl(item);
+      }
+
+      audio.src = src;
+      audio.load();
+      await audio.play();
+    } catch (err) {
+      setIsBuffering(false);
+      setIsPlaying(false);
+      const msg = err instanceof Error ? err.message : 'Erro ao reproduzir';
+      setError(msg.includes('preparar') ? 'Servidor demorou. Aguarde e tente de novo.' : msg);
+      throw err;
     }
-
-    audio.src = src;
-    audio.load();
-    tryStartPlayback(audio);
-  }, [currentTrack, isPlaying, tryStartPlayback]);
+  }, [currentTrack, isPlaying]);
 
   const pause = useCallback(() => {
     audioRef.current?.pause();
@@ -123,13 +137,14 @@ export function usePlayer() {
     const audio = audioRef.current;
     if (!audio || !currentTrack) return;
     if (isPlaying) audio.pause();
-    else tryStartPlayback(audio);
-  }, [currentTrack, isPlaying, tryStartPlayback]);
+    else audio.play().catch(() => setError('Toque novamente para reproduzir.'));
+  }, [currentTrack, isPlaying]);
 
   return {
     currentTrack,
     isPlaying,
     isBuffering,
+    error,
     progress,
     duration,
     volume,

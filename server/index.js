@@ -8,7 +8,9 @@ import {
   getTrendingYouTube,
   getPlaylistItems,
   proxyStream,
+  streamRedirect,
   prepareStream,
+  MAX_DOWNLOAD_SECONDS,
 } from './youtube.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -22,7 +24,7 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', source: 'youtube' });
+  res.json({ status: 'ok', source: 'youtube', maxDownloadMin: MAX_DOWNLOAD_SECONDS / 60 });
 });
 
 app.get('/api/search', async (req, res) => {
@@ -32,7 +34,6 @@ app.get('/api/search', async (req, res) => {
     if (!query) {
       return res.status(400).json({ error: 'Query obrigatória' });
     }
-
     const results = await searchYouTube(query, filter);
     res.json({ data: results });
   } catch (err) {
@@ -63,27 +64,40 @@ app.get('/api/youtube/prepare/:id', async (req, res) => {
     const result = await prepareStream(req.params.id);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao preparar stream', message: String(err) });
+    console.error('prepare error:', err);
+    res.status(500).json({ error: 'Erro ao preparar stream', message: String(err?.message || err) });
   }
 });
 
+// Playback: redirect direto para CDN (rápido no celular)
 app.get('/api/youtube/stream/:id', async (req, res) => {
   try {
-    await proxyStream(req.params.id, req, res);
+    await streamRedirect(req.params.id, res);
   } catch (err) {
+    console.error('stream redirect error:', err);
     if (!res.headersSent) {
-      res.status(500).json({ error: 'Erro no stream', message: String(err) });
+      res.status(500).json({ error: 'Erro no stream', message: String(err?.message || err) });
     }
   }
 });
 
-// Compat: rota antiga redireciona para YouTube
-app.get('/api/stream/:id', async (req, res) => {
+// Download: proxy com suporte a range
+app.get('/api/youtube/download/:id', async (req, res) => {
   try {
     await proxyStream(req.params.id, req, res);
   } catch (err) {
     if (!res.headersSent) {
-      res.status(500).json({ error: 'Erro no stream', message: String(err) });
+      res.status(500).json({ error: 'Erro no download', message: String(err?.message || err) });
+    }
+  }
+});
+
+app.get('/api/stream/:id', async (req, res) => {
+  try {
+    await streamRedirect(req.params.id, res);
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Erro no stream', message: String(err?.message || err) });
     }
   }
 });
