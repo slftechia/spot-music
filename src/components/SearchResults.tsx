@@ -81,8 +81,20 @@ export default function SearchResults({
               )}
 
               {durationLabel(item) && (
-                <span className="absolute bottom-1.5 right-1.5 bg-black/85 text-white text-[11px] font-medium px-1.5 py-0.5 rounded">
+                <span className="absolute bottom-1.5 right-1.5 bg-black/85 text-white text-[11px] font-medium px-1.5 py-0.5 rounded z-10">
                   {durationLabel(item)}
+                </span>
+              )}
+
+              {active && isPlaying && !isCollection && (
+                <span className="absolute bottom-1.5 left-1.5 flex gap-0.5 items-end h-4 z-10 bg-black/75 rounded px-1.5 py-0.5">
+                  {[0, 1, 2].map((n) => (
+                    <span
+                      key={n}
+                      className="w-0.5 bg-spotify-green animate-bar"
+                      style={{ animationDelay: `${n * 0.15}s`, height: '100%' }}
+                    />
+                  ))}
                 </span>
               )}
 
@@ -130,23 +142,11 @@ export default function SearchResults({
               )}
             </div>
 
-            <div className="flex items-start gap-1 shrink-0 pt-1">
-              {active && isPlaying && (
-                <span className="flex gap-0.5 items-end h-4 mr-1">
-                  {[0, 1, 2].map((n) => (
-                    <span
-                      key={n}
-                      className="w-0.5 bg-spotify-green animate-bar"
-                      style={{ animationDelay: `${n * 0.15}s`, height: '100%' }}
-                    />
-                  ))}
-                </span>
-              )}
-
+            <div className="flex flex-col items-center shrink-0 pt-1 min-w-[44px]">
               {!isCollection && DOWNLOADS_ENABLED && (
                 <>
                   {downloading ? (
-                    <div className="flex items-center gap-1 text-spotify-green text-xs p-2">
+                    <div className="flex flex-col items-center gap-0.5 text-spotify-green text-xs p-2">
                       <Loader2 size={18} className="animate-spin" />
                       {downloadProgress !== undefined && <span>{downloadProgress}%</span>}
                     </div>

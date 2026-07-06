@@ -96,7 +96,7 @@ export default function TrackList({
               {track.durationText || formatTime(track.duration, track.duration >= 3600)}
             </span>
 
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex flex-col items-center shrink-0 min-w-[44px]">
               {downloading ? (
                 <div className="flex items-center gap-1 text-spotify-green text-xs">
                   <Loader2 size={16} className="animate-spin" />
