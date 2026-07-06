@@ -32,7 +32,7 @@ declare global {
           };
         }
       ) => YTPlayer;
-      PlayerState: { PLAYING: number; PAUSED: number; BUFFERING: number; ENDED: number };
+      PlayerState: { PLAYING: number; PAUSED: number; BUFFERING: number; ENDED: number; CUED: number };
     };
     onYouTubeIframeAPIReady?: () => void;
   }
@@ -40,7 +40,7 @@ declare global {
 
 let ytApiPromise: Promise<void> | null = null;
 
-function loadYouTubeAPI() {
+export function loadYouTubeAPI() {
   if (ytApiPromise) return ytApiPromise;
   ytApiPromise = new Promise((resolve) => {
     if (window.YT?.Player) {
@@ -61,12 +61,16 @@ function loadYouTubeAPI() {
   return ytApiPromise;
 }
 
+const BUFFERING_TIMEOUT_MS = 15000;
+
 export function usePlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ytRef = useRef<YTPlayer | null>(null);
   const ytReady = useRef(false);
   const modeRef = useRef<'youtube' | 'audio'>('youtube');
   const tickRef = useRef<number | null>(null);
+  const pendingVideoId = useRef<string | null>(null);
+  const needsGesturePlay = useRef(false);
 
   const [currentTrack, setCurrentTrack] = useState<MediaItem | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -96,6 +100,18 @@ export function usePlayer() {
     };
     tickRef.current = requestAnimationFrame(loop);
   }, [stopTick]);
+
+  const playYoutubeNow = useCallback((videoId: string) => {
+    if (!ytRef.current || !ytReady.current) {
+      pendingVideoId.current = videoId;
+      needsGesturePlay.current = true;
+      return false;
+    }
+    ytRef.current.loadVideoById(videoId);
+    ytRef.current.playVideo();
+    needsGesturePlay.current = false;
+    return true;
+  }, []);
 
   useEffect(() => {
     const audio = new Audio();
@@ -153,20 +169,35 @@ export function usePlayer() {
     audio.addEventListener('error', onError);
 
     loadYouTubeAPI().then(() => {
-      if (!document.getElementById('yt-player-host')) return;
-      ytRef.current = new window.YT!.Player('yt-player-host', {
-        height: 1,
-        width: 1,
+      const host = document.getElementById('yt-player-host');
+      if (!host || ytRef.current) return;
+
+      ytRef.current = new window.YT!.Player(host, {
+        height: 200,
+        width: 300,
         playerVars: {
           playsinline: 1,
           controls: 0,
           modestbranding: 1,
           rel: 0,
+          origin: window.location.origin,
+          enablejsapi: 1,
         },
         events: {
           onReady: () => {
             ytReady.current = true;
             ytRef.current?.setVolume(volume);
+            const pending = pendingVideoId.current;
+            if (pending) {
+              pendingVideoId.current = null;
+              ytRef.current?.loadVideoById(pending);
+              if (!needsGesturePlay.current) {
+                ytRef.current?.playVideo();
+              } else {
+                setIsBuffering(false);
+                setError('Toque play para iniciar');
+              }
+            }
           },
           onStateChange: (e) => {
             if (modeRef.current !== 'youtube') return;
@@ -185,11 +216,13 @@ export function usePlayer() {
               setIsPlaying(false);
               setIsBuffering(false);
               stopTick();
+            } else if (e.data === PS.CUED) {
+              setIsBuffering(false);
             }
           },
           onError: () => {
             if (modeRef.current === 'youtube') {
-              setError('Vídeo indisponível para reprodução.');
+              setError('Vídeo indisponível. Tente outra música.');
               setIsBuffering(false);
               setIsPlaying(false);
             }
@@ -203,6 +236,8 @@ export function usePlayer() {
       audio.pause();
       audio.src = '';
       ytRef.current?.destroy();
+      ytRef.current = null;
+      ytReady.current = false;
     };
   }, [startTick, stopTick, volume]);
 
@@ -211,16 +246,28 @@ export function usePlayer() {
     else if (audioRef.current) audioRef.current.volume = volume / 100;
   }, [volume]);
 
-  const play = useCallback(async (item: MediaItem, offline = false) => {
+  useEffect(() => {
+    if (!isBuffering || isPlaying) return;
+    const timer = setTimeout(() => {
+      setIsBuffering(false);
+      setError('Não iniciou. Toque no botão play novamente.');
+    }, BUFFERING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [isBuffering, isPlaying, currentTrack?.id]);
+
+  const play = useCallback((item: MediaItem, offline = false) => {
     if (needsPlaylistOpen(item)) return;
 
     if (currentTrack?.id === item.id) {
       if (isPlaying) {
         if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
         else audioRef.current?.pause();
+      } else if (modeRef.current === 'youtube') {
+        ytRef.current?.playVideo();
+        setIsBuffering(true);
+        setError(null);
       } else {
-        if (modeRef.current === 'youtube') ytRef.current?.playVideo();
-        else audioRef.current?.play();
+        audioRef.current?.play();
       }
       return;
     }
@@ -235,32 +282,28 @@ export function usePlayer() {
     if (offline) {
       modeRef.current = 'audio';
       ytRef.current?.pauseVideo();
-      const downloaded = await getDownloadedTrack(item.id);
-      if (!downloaded?.blobUrl) throw new Error('Faixa não encontrada offline');
-      const audio = audioRef.current!;
-      audio.src = downloaded.blobUrl;
-      audio.load();
-      await audio.play();
+      void (async () => {
+        try {
+          const downloaded = await getDownloadedTrack(item.id);
+          if (!downloaded?.blobUrl) throw new Error('offline');
+          const audio = audioRef.current!;
+          audio.src = downloaded.blobUrl;
+          audio.load();
+          await audio.play();
+        } catch {
+          setIsBuffering(false);
+          setIsPlaying(false);
+          setError('Faixa não encontrada offline.');
+        }
+      })();
       return;
     }
 
     modeRef.current = 'youtube';
     audioRef.current?.pause();
-
-    await loadYouTubeAPI();
-    if (!ytReady.current || !ytRef.current) {
-      await new Promise<void>((resolve) => {
-        const check = () => {
-          if (ytReady.current && ytRef.current) resolve();
-          else setTimeout(check, 100);
-        };
-        check();
-      });
-    }
-
-    ytRef.current!.loadVideoById(item.id);
-    ytRef.current!.playVideo();
-  }, [currentTrack, isPlaying, volume]);
+    loadYouTubeAPI();
+    playYoutubeNow(item.id);
+  }, [currentTrack, isPlaying, playYoutubeNow]);
 
   const pause = useCallback(() => {
     if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
@@ -275,9 +318,17 @@ export function usePlayer() {
 
   const toggle = useCallback(() => {
     if (!currentTrack) return;
-    if (isPlaying) pause();
-    else if (modeRef.current === 'youtube') ytRef.current?.playVideo();
-    else audioRef.current?.play();
+    if (isPlaying) {
+      pause();
+      return;
+    }
+    if (modeRef.current === 'youtube') {
+      ytRef.current?.playVideo();
+      setIsBuffering(true);
+      setError(null);
+    } else {
+      audioRef.current?.play();
+    }
   }, [currentTrack, isPlaying, pause]);
 
   const setVolumeLevel = useCallback((v: number) => {

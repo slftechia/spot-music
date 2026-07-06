@@ -2,6 +2,7 @@ import type { MediaItem, SearchFilter } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 export const MAX_DOWNLOAD_SECONDS = 20 * 60;
+export const DOWNLOADS_ENABLED = false;
 
 export async function searchMedia(query: string, filter: SearchFilter = 'all') {
   const res = await fetch(
@@ -35,9 +36,8 @@ export async function prepareStream(item: MediaItem | string): Promise<void> {
   }
 }
 
-export function prefetchStream(item: MediaItem) {
-  if (item.source !== 'youtube') return;
-  prepareStream(item).catch(() => {});
+export function prefetchStream(_item: MediaItem) {
+  // Playback usa YouTube IFrame no cliente — sem prefetch no servidor
 }
 
 export function getStreamUrl(item: MediaItem | string) {
@@ -58,9 +58,9 @@ export function canDownload(item: MediaItem) {
 export function downloadBlockedReason(item: MediaItem) {
   if (!canDownload(item)) {
     const min = Math.round(MAX_DOWNLOAD_SECONDS / 60);
-    return `Muito longo para baixar no celular (máx. ${min} min). Ouça online.`;
+    return `Muito longo para baixar (máx. ${min} min). Ouça online.`;
   }
-  return null;
+  return 'Download offline temporariamente indisponível. Ouça online pelo app.';
 }
 
 export function isPlayable(item: MediaItem) {

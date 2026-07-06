@@ -2,7 +2,7 @@ import { Download, ListMusic, Loader2, Play, Trash2 } from 'lucide-react';
 import type { MediaItem } from '../types';
 import { TYPE_LABELS } from '../types';
 import { formatTime } from '../hooks/usePlayer';
-import { prefetchStream, canDownload } from '../services/api';
+import { prefetchStream, canDownload, DOWNLOADS_ENABLED } from '../services/api';
 
 interface Props {
   items: MediaItem[];
@@ -143,7 +143,7 @@ export default function SearchResults({
                 </span>
               )}
 
-              {!isCollection && (
+              {!isCollection && (downloaded || DOWNLOADS_ENABLED) && (
                 <>
                   {downloading ? (
                     <div className="flex items-center gap-1 text-spotify-green text-xs p-2">
@@ -162,16 +162,16 @@ export default function SearchResults({
                     ) : (
                       <span className="text-xs text-spotify-green px-2 py-2">✓ Offline</span>
                     )
-              ) : (
-                <button
-                  onClick={() => onDownload(item)}
-                  disabled={!canDownload(item)}
-                  className="p-2 text-spotify-light hover:text-white transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={canDownload(item) ? 'Baixar para offline' : 'Máx. 20 min para download'}
-                >
-                  <Download size={16} />
-                </button>
-              )}
+                  ) : (
+                    <button
+                      onClick={() => onDownload(item)}
+                      disabled={!canDownload(item)}
+                      className="p-2 text-spotify-light hover:text-white transition-colors sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-30 disabled:cursor-not-allowed"
+                      title="Baixar para offline"
+                    >
+                      <Download size={16} />
+                    </button>
+                  )}
                 </>
               )}
             </div>

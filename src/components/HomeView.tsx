@@ -29,13 +29,27 @@ export default function HomeView({
 }: Props) {
   const [items, setItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingSlow, setLoadingSlow] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [openPlaylist, setOpenPlaylist] = useState<MediaItem | null>(null);
 
-  useEffect(() => {
+  const loadTrending = () => {
+    setLoading(true);
+    setLoadingSlow(false);
+    setLoadError(false);
+    const slowTimer = setTimeout(() => setLoadingSlow(true), 8000);
     getTrending()
       .then(setItems)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+      .catch(() => setLoadError(true))
+      .finally(() => {
+        clearTimeout(slowTimer);
+        setLoading(false);
+        setLoadingSlow(false);
+      });
+  };
+
+  useEffect(() => {
+    loadTrending();
   }, []);
 
   if (openPlaylist) {
@@ -64,8 +78,23 @@ export default function HomeView({
       <section>
         <h3 className="text-xl font-bold mb-4">Músicas para ouvir agora</h3>
         {loading ? (
-          <div className="flex justify-center py-12">
+          <div className="flex flex-col items-center gap-3 py-12 text-center">
             <Loader2 className="animate-spin text-spotify-green" size={32} />
+            {loadingSlow && (
+              <p className="text-sm text-spotify-light max-w-xs">
+                Servidor acordando… pode levar até 30s na primeira vez.
+              </p>
+            )}
+          </div>
+        ) : loadError ? (
+          <div className="text-center py-12">
+            <p className="text-spotify-light mb-4">Não foi possível carregar. O servidor pode estar dormindo.</p>
+            <button
+              onClick={loadTrending}
+              className="px-4 py-2 rounded-full bg-spotify-green text-black font-medium text-sm"
+            >
+              Tentar novamente
+            </button>
           </div>
         ) : (
           <SearchResults

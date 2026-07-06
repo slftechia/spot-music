@@ -52,11 +52,11 @@ export default function App() {
       alert('Sem conexão. Baixe a música primeiro para ouvir offline.');
       return;
     }
-    player.play(item, offline).catch(() => {});
+    player.play(item, offline);
   };
 
   const handlePlayOffline = (item: MediaItem) => {
-    player.play(item, true).catch(console.error);
+    player.play(item, true);
   };
 
   const handleDownload = async (item: MediaItem) => {
@@ -97,7 +97,11 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <div id="yt-player-host" className="fixed w-px h-px opacity-0 pointer-events-none -z-50" aria-hidden />
+      <div
+        id="yt-player-host"
+        className="fixed -left-[9999px] top-0 w-[300px] h-[200px] opacity-0 pointer-events-none"
+        aria-hidden
+      />
       <Sidebar current={view} onChange={setView} />
 
       <main className="flex-1 overflow-y-auto pb-36 md:pb-24">
