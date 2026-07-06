@@ -1,9 +1,11 @@
-import { Home, Library, Search } from 'lucide-react';
+import { Download, Home, Library, Search } from 'lucide-react';
 import type { View } from '../types';
 
 interface Props {
   current: View;
   onChange: (view: View) => void;
+  showInstall?: boolean;
+  onInstall?: () => void;
 }
 
 const items: { id: View; label: string; icon: typeof Home }[] = [
@@ -12,7 +14,7 @@ const items: { id: View; label: string; icon: typeof Home }[] = [
   { id: 'library', label: 'Biblioteca', icon: Library },
 ];
 
-export default function Sidebar({ current, onChange }: Props) {
+export default function Sidebar({ current, onChange, showInstall, onInstall }: Props) {
   return (
     <aside className="hidden md:flex w-56 lg:w-64 flex-col gap-2 p-6 bg-spotify-black shrink-0">
       <div className="flex items-center gap-2 mb-6">
@@ -37,11 +39,16 @@ export default function Sidebar({ current, onChange }: Props) {
             {label}
           </button>
         ))}
+        {showInstall && onInstall && (
+          <button
+            onClick={onInstall}
+            className="flex items-center gap-4 px-3 py-2.5 rounded-md text-sm font-semibold text-spotify-green hover:text-white hover:bg-spotify-gray transition-colors mt-2"
+          >
+            <Download size={22} />
+            Instalar app
+          </button>
+        )}
       </nav>
-
-      <div className="mt-auto pt-6 text-xs text-spotify-light">
-        <p>Músicas baixadas ficam disponíveis offline.</p>
-      </div>
     </aside>
   );
 }

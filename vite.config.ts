@@ -7,17 +7,23 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'favicon.png', 'apple-touch-icon.png'],
+      injectRegister: 'auto',
+      includeAssets: ['favicon.svg', 'favicon.png', 'apple-touch-icon.png', 'pwa-192.png', 'pwa-512.png'],
       manifest: {
+        id: '/',
         name: 'Spot Music',
         short_name: 'SpotMusic',
-        description: 'Ouça e baixe músicas offline',
+        description: 'Ouça músicas estilo Spotify',
         theme_color: '#1db954',
         background_color: '#121212',
         display: 'standalone',
+        display_override: ['standalone', 'minimal-ui'],
         start_url: '/',
         scope: '/',
         orientation: 'portrait',
+        lang: 'pt-BR',
+        dir: 'ltr',
+        categories: ['music', 'entertainment'],
         icons: [
           {
             src: 'pwa-192.png',
@@ -30,6 +36,12 @@ export default defineConfig({
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any',
+          },
+          {
+            src: 'pwa-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable',
           },
           {
             src: 'icon-512-maskable.png',

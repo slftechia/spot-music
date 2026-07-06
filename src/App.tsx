@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import MobileNav from './components/MobileNav';
 import Player from './components/Player';
+import InstallApp from './components/InstallApp';
 import HomeView from './components/HomeView';
 import SearchView from './components/SearchView';
 import LibraryView from './components/LibraryView';
 import { usePlayer } from './hooks/usePlayer';
+import { useInstallPrompt } from './hooks/useInstallPrompt';
 import {
   downloadTrack,
   getAllDownloads,
@@ -22,6 +24,7 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine);
 
   const player = usePlayer();
+  const install = useInstallPrompt();
 
   const refreshDownloads = useCallback(async () => {
     const downloads = await getAllDownloads();
@@ -107,7 +110,12 @@ export default function App() {
         className="hidden md:block fixed -left-[9999px] top-0 w-[300px] h-[200px] opacity-0 pointer-events-none"
         aria-hidden
       />
-      <Sidebar current={view} onChange={setView} />
+      <Sidebar
+        current={view}
+        onChange={setView}
+        showInstall={install.canInstall}
+        onInstall={install.install}
+      />
 
       <main className="flex-1 overflow-y-auto pb-36 md:pb-24">
         {!online && (
@@ -153,7 +161,21 @@ export default function App() {
         </div>
       </main>
 
-      <MobileNav current={view} onChange={setView} />
+      <MobileNav
+        current={view}
+        onChange={setView}
+        showInstall={install.canInstall}
+        onInstall={install.install}
+      />
+
+      <InstallApp
+        open={install.showModal}
+        isIOS={install.isIOS}
+        isAndroid={install.isAndroid}
+        hasNativePrompt={install.hasNativePrompt}
+        onClose={() => install.setShowModal(false)}
+        onInstall={install.install}
+      />
 
       <Player
         track={player.currentTrack}
