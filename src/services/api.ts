@@ -2,7 +2,7 @@ import type { MediaItem, SearchFilter } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 export const MAX_DOWNLOAD_SECONDS = 20 * 60;
-export const DOWNLOADS_ENABLED = false;
+export const DOWNLOADS_ENABLED = true;
 
 export async function getSearchSuggestions(query: string) {
   const res = await fetch(`${API_BASE}/suggest?q=${encodeURIComponent(query)}`);
@@ -67,7 +67,7 @@ export function downloadBlockedReason(item: MediaItem) {
     const min = Math.round(MAX_DOWNLOAD_SECONDS / 60);
     return `Muito longo para baixar (máx. ${min} min). Ouça online.`;
   }
-  return 'Download offline temporariamente indisponível. Ouça online pelo app.';
+  return null;
 }
 
 export function isPlayable(item: MediaItem) {

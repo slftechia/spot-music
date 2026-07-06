@@ -118,10 +118,12 @@ export default function TrackList({
                 <button
                   onClick={() => onDownload(track)}
                   disabled={!canDownload(track)}
-                  className="p-2 text-spotify-light hover:text-white transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-30"
+                  className="flex flex-col items-center gap-0.5 p-2 text-spotify-light hover:text-white transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-30"
                   title={canDownload(track) ? 'Baixar para offline' : 'Máx. 20 min'}
+                  aria-label="Baixar música"
                 >
-                  <Download size={16} />
+                  <Download size={18} />
+                  <span className="text-[9px] font-medium sm:hidden">Baixar</span>
                 </button>
               )}
             </div>

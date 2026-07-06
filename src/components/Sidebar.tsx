@@ -1,4 +1,4 @@
-import { Download, Home, Library, Search } from 'lucide-react';
+import { Home, Library, Search, Smartphone } from 'lucide-react';
 import type { View } from '../types';
 
 interface Props {
@@ -44,7 +44,7 @@ export default function Sidebar({ current, onChange, showInstall, onInstall }: P
             onClick={onInstall}
             className="flex items-center gap-4 px-3 py-2.5 rounded-md text-sm font-semibold text-spotify-green hover:text-white hover:bg-spotify-gray transition-colors mt-2"
           >
-            <Download size={22} />
+            <Smartphone size={22} />
             Instalar app
           </button>
         )}

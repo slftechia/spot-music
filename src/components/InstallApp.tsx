@@ -1,4 +1,4 @@
-import { Download, X } from 'lucide-react';
+import { Smartphone, X } from 'lucide-react';
 
 interface Props {
   open: boolean;
@@ -48,7 +48,7 @@ export default function InstallApp({
             onClick={onInstall}
             className="w-full py-3 rounded-full bg-spotify-green text-black font-semibold flex items-center justify-center gap-2"
           >
-            <Download size={18} />
+            <Smartphone size={18} />
             Instalar agora
           </button>
         ) : isIOS ? (

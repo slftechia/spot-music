@@ -143,21 +143,22 @@ export default function SearchResults({
                 </span>
               )}
 
-              {!isCollection && (downloaded || DOWNLOADS_ENABLED) && (
+              {!isCollection && DOWNLOADS_ENABLED && (
                 <>
                   {downloading ? (
                     <div className="flex items-center gap-1 text-spotify-green text-xs p-2">
-                      <Loader2 size={16} className="animate-spin" />
+                      <Loader2 size={18} className="animate-spin" />
                       {downloadProgress !== undefined && <span>{downloadProgress}%</span>}
                     </div>
                   ) : downloaded ? (
                     showRemove ? (
                       <button
                         onClick={() => onRemove?.(item)}
-                        className="p-2 text-spotify-light hover:text-red-400 transition-colors"
+                        className="p-2.5 text-spotify-light hover:text-red-400 transition-colors"
                         title="Remover download"
+                        aria-label="Remover download"
                       >
-                        <Trash2 size={16} />
+                        <Trash2 size={18} />
                       </button>
                     ) : (
                       <span className="text-xs text-spotify-green px-2 py-2">✓ Offline</span>
@@ -166,10 +167,12 @@ export default function SearchResults({
                     <button
                       onClick={() => onDownload(item)}
                       disabled={!canDownload(item)}
-                      className="p-2 text-spotify-light hover:text-white transition-colors sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-30 disabled:cursor-not-allowed"
-                      title="Baixar para offline"
+                      className="flex flex-col items-center gap-0.5 p-2 text-spotify-light hover:text-white transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-30 disabled:cursor-not-allowed"
+                      title={canDownload(item) ? 'Baixar para offline' : 'Máx. 20 min'}
+                      aria-label="Baixar música"
                     >
-                      <Download size={16} />
+                      <Download size={18} />
+                      <span className="text-[9px] font-medium sm:hidden">Baixar</span>
                     </button>
                   )}
                 </>
