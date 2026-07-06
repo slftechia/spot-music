@@ -31,8 +31,46 @@ function baseYtdlpOpts() {
 let innertube = null;
 
 async function getInnertube() {
-  if (!innertube) innertube = await Innertube.create();
+  if (!innertube) {
+    innertube = await Innertube.create({ lang: 'pt', location: 'BR' });
+  }
   return innertube;
+}
+
+function isRelevantHomeTitle(title) {
+  if (/[\u0600-\u06FF\u0590-\u05FF\u4e00-\u9fff\u3040-\u30ff]/.test(title)) return false;
+  const lower = title.toLowerCase();
+  const blocked = ['nasheed', 'quran', 'adhan', 'arabic', 'islamic', 'turkish', 'indian', 'bts', 'k-pop', 'kpop'];
+  return !blocked.some((w) => lower.includes(w));
+}
+
+const HOME_GENRES = [
+  { id: 'sertanejo', title: 'Sertanejo', query: 'sertanejo 2026' },
+  { id: 'pagode', title: 'Pagode', query: 'pagode 2026' },
+  { id: 'reggae', title: 'Reggae', query: 'reggae 2026' },
+  { id: 'pop-rock', title: 'Pop Rock', query: 'pop rock 2026' },
+];
+
+function sortForMobile(items) {
+  const short = items.filter((i) => i.duration > 0 && i.duration <= 480);
+  const medium = items.filter((i) => i.duration > 480 && i.duration <= 1200);
+  const long = items.filter((i) => !i.duration || i.duration > 1200);
+  return [...short, ...medium, ...long].slice(0, 8);
+}
+
+async function searchGenreVideos(yt, query, limit = 8) {
+  const results = await yt.search(`${query} música`, { type: 'video' });
+  const items = [];
+  for (const item of results.results || []) {
+    if (item.type !== 'Video') continue;
+    const mapped = mapVideo(item);
+    if (!isRelevantHomeTitle(mapped.title)) continue;
+    if (mapped.type === 'compilation' && mapped.duration > 900) continue;
+    if (mapped.duration > 7200) continue;
+    items.push(mapped);
+    if (items.length >= limit) break;
+  }
+  return sortForMobile(items);
 }
 
 function parseDuration(text) {
@@ -173,21 +211,19 @@ export async function searchYouTube(query, filter = 'all') {
   return sortLikeYouTube(items).slice(0, 40);
 }
 
-function sortForMobile(items) {
-  const short = items.filter((i) => i.duration > 0 && i.duration <= 480);
-  const medium = items.filter((i) => i.duration > 480 && i.duration <= 1200);
-  const long = items.filter((i) => !i.duration || i.duration > 1200);
-  return [...short, ...medium, ...long].slice(0, 30);
-}
-
 export async function getTrendingYouTube() {
   const yt = await getInnertube();
-  const results = await yt.search('musicas 2026 official', { type: 'video' });
-  const items = [];
-  for (const item of results.results || []) {
-    if (item.type === 'Video') items.push(mapVideo(item));
-  }
-  return sortForMobile(items);
+  const sections = await Promise.all(
+    HOME_GENRES.map(async (genre) => {
+      try {
+        const items = await searchGenreVideos(yt, genre.query);
+        return { id: genre.id, title: genre.title, items };
+      } catch {
+        return { id: genre.id, title: genre.title, items: [] };
+      }
+    })
+  );
+  return sections.filter((s) => s.items.length > 0);
 }
 
 export async function getYouTubeSuggestions(query) {

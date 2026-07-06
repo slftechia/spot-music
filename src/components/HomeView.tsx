@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import SearchBar from './SearchBar';
-import SearchResults from './SearchResults';
-import PlaylistView from './PlaylistView';
+import HomeGenreRow from './HomeGenreRow';
 import { getTrending } from '../services/api';
-import type { MediaItem } from '../types';
+import type { HomeGenreSection, MediaItem } from '../types';
 
 interface Props {
   downloadedIds: Set<string>;
@@ -29,16 +28,15 @@ export default function HomeView({
   onCancelDownload,
   onSearchNavigate,
 }: Props) {
-  const [items, setItems] = useState<MediaItem[]>([]);
+  const [sections, setSections] = useState<HomeGenreSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [openPlaylist, setOpenPlaylist] = useState<MediaItem | null>(null);
 
   const loadTrending = () => {
     setLoading(true);
     setLoadError(false);
     getTrending()
-      .then(setItems)
+      .then(setSections)
       .catch(() => setLoadError(true))
       .finally(() => setLoading(false));
   };
@@ -47,23 +45,6 @@ export default function HomeView({
     loadTrending();
   }, []);
 
-  if (openPlaylist) {
-    return (
-      <PlaylistView
-        playlist={openPlaylist}
-        currentId={currentId}
-        isPlaying={isPlaying}
-        downloadedIds={downloadedIds}
-        downloadingId={downloadingId}
-        downloadProgress={downloadProgress}
-        onClose={() => setOpenPlaylist(null)}
-        onPlay={onPlay}
-        onDownload={onDownload}
-        onCancelDownload={onCancelDownload}
-      />
-    );
-  }
-
   return (
     <div className="flex flex-col gap-8">
       <section>
@@ -71,8 +52,8 @@ export default function HomeView({
         <SearchBar onSearch={onSearchNavigate} placeholder="O que você quer ouvir?" />
       </section>
 
-      <section>
-        <h3 className="text-xl font-bold mb-4">Músicas para ouvir agora</h3>
+      <section className="flex flex-col gap-8">
+        <h3 className="text-xl font-bold">Músicas para ouvir agora</h3>
         {loading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="animate-spin text-spotify-green" size={32} />
@@ -88,18 +69,21 @@ export default function HomeView({
             </button>
           </div>
         ) : (
-          <SearchResults
-            items={items}
-            currentId={currentId}
-            isPlaying={isPlaying}
-            downloadedIds={downloadedIds}
-            downloadingId={downloadingId}
-            downloadProgress={downloadProgress}
-            onPlay={onPlay}
-            onOpenPlaylist={setOpenPlaylist}
-            onDownload={onDownload}
-            onCancelDownload={onCancelDownload}
-          />
+          sections.map((section) => (
+            <HomeGenreRow
+              key={section.id}
+              title={section.title}
+              items={section.items}
+              currentId={currentId}
+              isPlaying={isPlaying}
+              downloadedIds={downloadedIds}
+              downloadingId={downloadingId}
+              downloadProgress={downloadProgress}
+              onPlay={onPlay}
+              onDownload={onDownload}
+              onCancelDownload={onCancelDownload}
+            />
+          ))
         )}
       </section>
     </div>

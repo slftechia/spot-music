@@ -1,4 +1,4 @@
-import type { MediaItem, SearchFilter } from '../types';
+import type { MediaItem, SearchFilter, HomeGenreSection } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 export const MAX_DOWNLOAD_SECONDS = 3 * 60 * 60;
@@ -24,7 +24,7 @@ export async function getTrending() {
   const res = await fetch(`${API_BASE}/trending`);
   if (!res.ok) throw new Error('Falha ao carregar trending');
   const data = await res.json();
-  return data.data as MediaItem[];
+  return data.data as HomeGenreSection[];
 }
 
 export async function getPlaylistItems(playlistId: string) {

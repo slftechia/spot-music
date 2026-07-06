@@ -27,6 +27,12 @@ export interface DownloadedTrack extends MediaItem {
 
 export type View = 'home' | 'search' | 'library';
 
+export interface HomeGenreSection {
+  id: string;
+  title: string;
+  items: MediaItem[];
+}
+
 export const FILTER_LABELS: Record<SearchFilter, string> = {
   all: 'Tudo',
   videos: 'Vídeos',
