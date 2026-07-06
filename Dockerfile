@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+COPY scripts/generate-icons.mjs scripts/generate-icons.mjs
+COPY public/icon.svg public/icon.svg
+COPY public/favicon.svg public/favicon.svg
 RUN npm install --include=dev
 
 COPY . .
