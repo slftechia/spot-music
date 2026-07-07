@@ -1,8 +1,10 @@
-import { strToU8, strFromU8 } from 'fflate';
+import { strToU8 } from 'fflate';
 import type { MediaItem } from '../types';
 import { getRawDownloads, importDownloadEntry } from './offlineStorage';
 
 const MANIFEST_FILE = 'manifest.json';
+const MAX_PART_BYTES = 180 * 1024 * 1024;
+const MAX_TRACKS_PER_PART = 8;
 
 type ManifestEntry = {
   track: MediaItem;
@@ -11,9 +13,11 @@ type ManifestEntry = {
 };
 
 export type SyncProgress = {
-  phase: 'reading' | 'zipping' | 'saving';
+  phase: 'reading' | 'zipping' | 'saving' | 'extracting' | 'importing';
   current: number;
   total: number;
+  part?: number;
+  parts?: number;
 };
 
 let zipWorker: Worker | null = null;
@@ -62,30 +66,6 @@ function runZipInWorker(files: Record<string, Uint8Array>): Promise<Uint8Array> 
   });
 }
 
-function runUnzipInWorker(data: Uint8Array): Promise<Record<string, Uint8Array>> {
-  return new Promise((resolve, reject) => {
-    const worker = getZipWorker();
-    const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
-
-    const onMessage = (e: MessageEvent) => {
-      worker.removeEventListener('message', onMessage);
-      worker.removeEventListener('error', onError);
-      if (e.data?.type === 'unzip-done') resolve(e.data.data as Record<string, Uint8Array>);
-      else reject(new Error(e.data?.message || 'UNZIP_FAILED'));
-    };
-
-    const onError = () => {
-      worker.removeEventListener('message', onMessage);
-      worker.removeEventListener('error', onError);
-      reject(new Error('UNZIP_WORKER_FAILED'));
-    };
-
-    worker.addEventListener('message', onMessage);
-    worker.addEventListener('error', onError);
-    worker.postMessage({ type: 'unzip', data: new Uint8Array(buf) }, [buf]);
-  });
-}
-
 async function saveZipFile(blob: Blob, filename: string) {
   const picker = (
     window as Window & {
@@ -121,20 +101,45 @@ async function saveZipFile(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-export async function exportLibraryZip(
-  onProgress?: (p: SyncProgress) => void
-): Promise<{ count: number; filename: string }> {
-  const entries = await getRawDownloads();
-  if (entries.length === 0) {
-    throw new Error('EMPTY_LIBRARY');
+type RawEntry = Awaited<ReturnType<typeof getRawDownloads>>[number];
+
+function splitIntoParts(entries: RawEntry[]) {
+  const parts: RawEntry[][] = [];
+  let current: RawEntry[] = [];
+  let currentSize = 0;
+
+  for (const entry of entries) {
+    const size = entry.audioBlob.size;
+    const wouldOverflow =
+      current.length > 0 &&
+      (currentSize + size > MAX_PART_BYTES || current.length >= MAX_TRACKS_PER_PART);
+
+    if (wouldOverflow) {
+      parts.push(current);
+      current = [];
+      currentSize = 0;
+    }
+
+    current.push(entry);
+    currentSize += size;
   }
 
+  if (current.length) parts.push(current);
+  return parts;
+}
+
+async function exportPart(
+  partEntries: RawEntry[],
+  partIndex: number,
+  totalParts: number,
+  date: string,
+  onProgress?: (p: SyncProgress) => void
+) {
   const files: Record<string, Uint8Array> = {};
   const manifest: ManifestEntry[] = [];
-  const total = entries.length;
 
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
+  for (let i = 0; i < partEntries.length; i++) {
+    const entry = partEntries[i];
     const audioFile = `audio/${entry.track.id}.m4a`;
     manifest.push({
       track: entry.track,
@@ -142,66 +147,143 @@ export async function exportLibraryZip(
       downloadedAt: entry.downloadedAt,
     });
     files[audioFile] = new Uint8Array(await entry.audioBlob.arrayBuffer());
-    onProgress?.({ phase: 'reading', current: i + 1, total });
+    onProgress?.({
+      phase: 'reading',
+      current: i + 1,
+      total: partEntries.length,
+      part: partIndex,
+      parts: totalParts,
+    });
     await yieldMain();
   }
 
-  files[MANIFEST_FILE] = strToU8(JSON.stringify({ version: 1, tracks: manifest }));
+  files[MANIFEST_FILE] = strToU8(
+    JSON.stringify({ version: 1, part: partIndex, totalParts, tracks: manifest })
+  );
 
-  onProgress?.({ phase: 'zipping', current: 0, total: 1 });
+  onProgress?.({ phase: 'zipping', current: partIndex, total: totalParts, part: partIndex, parts: totalParts });
   const zipped = await runZipInWorker(files);
-  onProgress?.({ phase: 'zipping', current: 1, total: 1 });
 
-  const date = new Date().toISOString().slice(0, 10);
-  const filename = `spot-music-biblioteca-${date}.zip`;
+  const filename =
+    totalParts === 1
+      ? `spot-music-biblioteca-${date}.zip`
+      : `spot-music-biblioteca-${date}-parte${partIndex}-de-${totalParts}.zip`;
 
-  onProgress?.({ phase: 'saving', current: 0, total: 1 });
+  onProgress?.({ phase: 'saving', current: partIndex, total: totalParts, part: partIndex, parts: totalParts });
   await saveZipFile(new Blob([zipped as BlobPart], { type: 'application/zip' }), filename);
-  onProgress?.({ phase: 'saving', current: 1, total: 1 });
+  return filename;
+}
 
-  return { count: entries.length, filename };
+export async function exportLibraryZip(
+  onProgress?: (p: SyncProgress) => void
+): Promise<{ count: number; filenames: string[] }> {
+  const entries = await getRawDownloads();
+  if (entries.length === 0) {
+    throw new Error('EMPTY_LIBRARY');
+  }
+
+  const parts = splitIntoParts(entries);
+  const date = new Date().toISOString().slice(0, 10);
+  const filenames: string[] = [];
+
+  for (let i = 0; i < parts.length; i++) {
+    const filename = await exportPart(parts[i], i + 1, parts.length, date, onProgress);
+    filenames.push(filename);
+    await yieldMain();
+  }
+
+  return { count: entries.length, filenames };
 }
 
 export async function importLibraryZip(
   file: File,
   onProgress?: (p: SyncProgress) => void
 ): Promise<number> {
-  const buf = new Uint8Array(await file.arrayBuffer());
+  const worker = getZipWorker();
+  worker.postMessage({ type: 'import-start' });
 
-  onProgress?.({ phase: 'zipping', current: 0, total: 1 });
-  let unzipped: Record<string, Uint8Array>;
-  try {
-    unzipped = await runUnzipInWorker(buf);
-  } catch {
-    throw new Error('INVALID_FILE');
-  }
-  onProgress?.({ phase: 'zipping', current: 1, total: 1 });
-
-  const manifestRaw = unzipped[MANIFEST_FILE];
-  if (!manifestRaw) throw new Error('INVALID_FILE');
-
-  const manifest = JSON.parse(strFromU8(manifestRaw)) as {
-    version?: number;
-    tracks: ManifestEntry[];
-  };
-
-  if (!Array.isArray(manifest.tracks)) throw new Error('INVALID_FILE');
-
-  const tracks = manifest.tracks.filter((t) => t.track?.id && unzipped[t.audioFile]);
   let imported = 0;
+  let total = 1;
+  let importChain = Promise.resolve();
 
-  for (let i = 0; i < tracks.length; i++) {
-    const item = tracks[i];
-    const audioData = unzipped[item.audioFile];
-    const blob = new Blob([audioData as BlobPart], { type: 'audio/mp4' });
-    await importDownloadEntry(item.track, blob, item.downloadedAt || Date.now());
-    imported++;
-    onProgress?.({ phase: 'reading', current: i + 1, total: tracks.length });
-    await yieldMain();
-  }
+  return new Promise((resolve, reject) => {
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data;
+      if (!data?.type) return;
 
-  if (imported === 0) throw new Error('NO_TRACKS');
-  return imported;
+      if (data.type === 'manifest') {
+        total = Math.max(1, data.count as number);
+        onProgress?.({ phase: 'extracting', current: 0, total });
+        return;
+      }
+
+      if (data.type === 'track') {
+        const entry = data.entry as ManifestEntry;
+        const audio = data.audio as Uint8Array;
+        if (!audio) return;
+
+        importChain = importChain.then(async () => {
+          const blob = new Blob([audio as BlobPart], { type: 'audio/mp4' });
+          await importDownloadEntry(entry.track, blob, entry.downloadedAt || Date.now());
+          imported++;
+          onProgress?.({ phase: 'importing', current: imported, total });
+          await yieldMain();
+        });
+        return;
+      }
+
+      if (data.type === 'import-done') {
+        importChain
+          .then(() => {
+            worker.removeEventListener('message', onMessage);
+            worker.removeEventListener('error', onError);
+            resolve(imported);
+          })
+          .catch(reject);
+        return;
+      }
+
+      if (data.type === 'error') {
+        worker.removeEventListener('message', onMessage);
+        worker.removeEventListener('error', onError);
+        const code = data.message as string;
+        if (code === 'NO_TRACKS') reject(new Error('NO_TRACKS'));
+        else if (code === 'INVALID_MANIFEST') reject(new Error('INVALID_FILE'));
+        else reject(new Error('IMPORT_FAILED'));
+      }
+    };
+
+    const onError = () => {
+      worker.removeEventListener('message', onMessage);
+      worker.removeEventListener('error', onError);
+      reject(new Error('IMPORT_WORKER_FAILED'));
+    };
+
+    worker.addEventListener('message', onMessage);
+    worker.addEventListener('error', onError);
+
+    (async () => {
+      try {
+        const reader = file.stream().getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            worker.postMessage({ type: 'import-chunk', data: null, final: true });
+            break;
+          }
+          const chunk = value;
+          const buf = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
+          worker.postMessage({ type: 'import-chunk', data: new Uint8Array(buf), final: false }, { transfer: [buf] });
+          onProgress?.({ phase: 'extracting', current: Math.min(imported, total), total });
+          await yieldMain();
+        }
+      } catch {
+        worker.removeEventListener('message', onMessage);
+        worker.removeEventListener('error', onError);
+        reject(new Error('IMPORT_FAILED'));
+      }
+    })();
+  });
 }
 
 export function isLocalDevHost() {

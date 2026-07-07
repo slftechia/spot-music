@@ -14,15 +14,22 @@ interface Props {
 }
 
 function progressLabel(p: SyncProgress) {
-  if (p.phase === 'reading') return `Lendo músicas ${p.current}/${p.total}…`;
-  if (p.phase === 'zipping') return 'Compactando arquivo…';
-  return 'Salvando .zip…';
+  const part =
+    p.parts && p.parts > 1 && p.part ? ` (parte ${p.part}/${p.parts})` : '';
+  if (p.phase === 'reading') return `Preparando músicas ${p.current}/${p.total}${part}…`;
+  if (p.phase === 'zipping') return `Compactando${part}…`;
+  if (p.phase === 'saving') return `Salvando .zip${part}…`;
+  if (p.phase === 'extracting') return 'Lendo arquivo .zip…';
+  return `Importando ${p.current}/${p.total}…`;
 }
 
 function progressPct(p: SyncProgress) {
-  if (p.phase === 'reading') return Math.round((p.current / p.total) * 85);
-  if (p.phase === 'zipping') return 90;
-  return 100;
+  if (p.phase === 'reading' && p.total) return Math.round((p.current / p.total) * 70);
+  if (p.phase === 'zipping') return 80;
+  if (p.phase === 'saving') return 95;
+  if (p.phase === 'extracting') return 15;
+  if (p.phase === 'importing' && p.total) return 15 + Math.round((p.current / p.total) * 85);
+  return 0;
 }
 
 export default function LibrarySync({ trackCount, onImported }: Props) {
@@ -41,8 +48,18 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
     setExporting(true);
     setProgress(null);
     try {
-      const { count, filename } = await exportLibraryZip(setProgress);
-      alert(`${count} música(s) exportada(s) em "${filename}". Envie esse arquivo para o celular.`);
+      const { count, filenames } = await exportLibraryZip(setProgress);
+      const filesText =
+        filenames.length === 1
+          ? `"${filenames[0]}"`
+          : `${filenames.length} arquivos:\n${filenames.join('\n')}`;
+      alert(
+        `${count} música(s) exportada(s).\n\n${filesText}\n\n${
+          filenames.length > 1
+            ? 'Importe TODOS os arquivos no celular, um por vez.'
+            : 'Envie esse arquivo para o celular.'
+        }`
+      );
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       if (err instanceof Error && err.message === 'EMPTY_LIBRARY') {
@@ -56,21 +73,26 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
     }
   };
 
-  const handleImport = async (file: File | undefined) => {
-    if (!file) return;
+  const handleImport = async (fileList: FileList | null | undefined) => {
+    if (!fileList?.length) return;
+    const files = Array.from(fileList);
     setImporting(true);
     setProgress(null);
     try {
-      const count = await importLibraryZip(file, setProgress);
+      let total = 0;
+      for (let i = 0; i < files.length; i++) {
+        const count = await importLibraryZip(files[i], setProgress);
+        total += count;
+      }
       onImported();
-      alert(`${count} música(s) importada(s)! Já pode ouvir offline.`);
+      alert(`${total} música(s) importada(s)! Já pode ouvir offline.`);
     } catch (err) {
       const msg =
         err instanceof Error && err.message === 'INVALID_FILE'
           ? 'Arquivo inválido. Use o .zip exportado do PC.'
           : err instanceof Error && err.message === 'NO_TRACKS'
             ? 'Nenhuma música encontrada no arquivo.'
-            : 'Erro ao importar. Verifique o arquivo.';
+            : 'Erro ao importar. Feche outras abas, use Wi‑Fi e tente de novo.';
       alert(msg);
     } finally {
       setImporting(false);
@@ -87,7 +109,7 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
         <h3 className="font-semibold text-sm">Biblioteca para viagem</h3>
         <p className="text-xs text-spotify-light mt-1 leading-relaxed">
           {mobile
-            ? 'No PC baixe as músicas e exporte. No celular, importe o arquivo .zip antes da viagem.'
+            ? 'Importe o .zip do PC (pode ser grande — use Wi‑Fi e aguarde). Bibliotecas grandes vêm em várias partes.'
             : 'Baixe no PC, exporte o .zip e importe no celular. Na estrada ouça offline sem baixar de novo.'}
         </p>
       </div>
@@ -101,7 +123,7 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
           <ol className="text-xs text-spotify-light space-y-1 list-decimal list-inside">
             <li>Baixe as músicas aqui {localDev ? '(modo local)' : '(rode o app localmente)'}</li>
             <li>Clique em Exportar biblioteca</li>
-            <li>Envie o .zip ao celular (Drive, WhatsApp…)</li>
+            <li>Envie os .zip ao celular (Drive, WhatsApp…)</li>
           </ol>
           <button
             type="button"
@@ -120,16 +142,17 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
             No celular
           </div>
           <ol className="text-xs text-spotify-light space-y-1 list-decimal list-inside">
-            <li>Receba o arquivo .zip do PC</li>
+            <li>Receba o(s) .zip do PC</li>
             <li>Toque em Importar biblioteca</li>
-            <li>Ouça offline na viagem</li>
+            <li>Se houver parte1, parte2… importe todos</li>
           </ol>
           <input
             ref={fileRef}
             type="file"
             accept=".zip,application/zip"
+            multiple
             className="hidden"
-            onChange={(e) => handleImport(e.target.files?.[0])}
+            onChange={(e) => handleImport(e.target.files)}
           />
           <button
             type="button"
@@ -156,7 +179,7 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
             />
           </div>
           <p className="text-[11px] text-spotify-light">
-            Bibliotecas grandes podem levar alguns minutos. Não feche a aba.
+            Arquivos grandes podem levar vários minutos. Não feche a aba — clique em Aguarde se o Chrome avisar.
           </p>
         </div>
       )}
