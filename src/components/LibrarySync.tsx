@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { HardDriveDownload, HardDriveUpload, Loader2, Monitor, Smartphone } from 'lucide-react';
+import { CheckSquare, HardDriveDownload, HardDriveUpload, Loader2, Monitor, Smartphone } from 'lucide-react';
 import { isMobileDevice } from '../utils/device';
 import {
   exportLibraryZip,
@@ -10,7 +10,12 @@ import {
 
 interface Props {
   trackCount: number;
+  selectionMode?: boolean;
+  selectedCount?: number;
+  selectedTrackIds?: string[];
   onImported: () => void;
+  onEnterSelection?: () => void;
+  onExitSelection?: () => void;
 }
 
 function progressLabel(p: SyncProgress) {
@@ -32,7 +37,15 @@ function progressPct(p: SyncProgress) {
   return 0;
 }
 
-export default function LibrarySync({ trackCount, onImported }: Props) {
+export default function LibrarySync({
+  trackCount,
+  selectionMode,
+  selectedCount = 0,
+  selectedTrackIds = [],
+  onImported,
+  onEnterSelection,
+  onExitSelection,
+}: Props) {
   const mobile = isMobileDevice();
   const localDev = isLocalDevHost();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -40,15 +53,23 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<SyncProgress | null>(null);
 
+  const exportSelectedOnly = selectionMode && selectedCount > 0;
+
   const handleExport = async () => {
     if (trackCount === 0) {
       alert('Nenhuma música na biblioteca para exportar.');
       return;
     }
+    if (selectionMode && selectedCount === 0) {
+      alert('Marque pelo menos uma música para exportar.');
+      return;
+    }
+
     setExporting(true);
     setProgress(null);
     try {
-      const { count, filenames } = await exportLibraryZip(setProgress);
+      const trackIds = exportSelectedOnly ? selectedTrackIds : undefined;
+      const { count, filenames } = await exportLibraryZip(setProgress, trackIds);
       const filesText =
         filenames.length === 1
           ? `"${filenames[0]}"`
@@ -60,10 +81,13 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
             : 'Envie esse arquivo para o celular.'
         }`
       );
+      if (selectionMode) onExitSelection?.();
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       if (err instanceof Error && err.message === 'EMPTY_LIBRARY') {
         alert('Biblioteca vazia.');
+      } else if (err instanceof Error && err.message === 'EMPTY_SELECTION') {
+        alert('Nenhuma música selecionada.');
       } else {
         alert('Erro ao exportar. Tente fechar outras abas e exportar de novo.');
       }
@@ -102,6 +126,9 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
   };
 
   const busy = exporting || importing;
+  const exportLabel = exportSelectedOnly
+    ? `Exportar selecionadas (${selectedCount})`
+    : 'Exportar biblioteca';
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 flex flex-col gap-4">
@@ -110,7 +137,7 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
         <p className="text-xs text-spotify-light mt-1 leading-relaxed">
           {mobile
             ? 'Importe o .zip do PC (pode ser grande — use Wi‑Fi e aguarde). Bibliotecas grandes vêm em várias partes.'
-            : 'Baixe no PC, exporte o .zip e importe no celular. Na estrada ouça offline sem baixar de novo.'}
+            : 'Marque as músicas que quer levar, exporte o .zip e importe no celular.'}
         </p>
       </div>
 
@@ -122,17 +149,28 @@ export default function LibrarySync({ trackCount, onImported }: Props) {
           </div>
           <ol className="text-xs text-spotify-light space-y-1 list-decimal list-inside">
             <li>Baixe as músicas aqui {localDev ? '(modo local)' : '(rode o app localmente)'}</li>
-            <li>Clique em Exportar biblioteca</li>
+            <li>Marque as que quer exportar (ou exporte tudo)</li>
             <li>Envie os .zip ao celular (Drive, WhatsApp…)</li>
           </ol>
+          {!mobile && trackCount > 0 && !selectionMode && (
+            <button
+              type="button"
+              onClick={onEnterSelection}
+              disabled={busy}
+              className="flex items-center justify-center gap-2 py-2 px-3 rounded-full border border-white/20 text-sm font-medium hover:border-white/40 disabled:opacity-40"
+            >
+              <CheckSquare size={16} />
+              Selecionar músicas
+            </button>
+          )}
           <button
             type="button"
             onClick={handleExport}
-            disabled={busy || trackCount === 0}
+            disabled={busy || trackCount === 0 || (selectionMode && selectedCount === 0)}
             className="mt-auto flex items-center justify-center gap-2 py-2 px-3 rounded-full bg-spotify-green text-black text-sm font-semibold disabled:opacity-40"
           >
             {exporting ? <Loader2 size={16} className="animate-spin" /> : <HardDriveDownload size={16} />}
-            Exportar biblioteca
+            {exportLabel}
           </button>
         </div>
 

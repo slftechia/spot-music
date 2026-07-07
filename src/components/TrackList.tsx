@@ -11,6 +11,9 @@ interface Props {
   downloadingId?: string | null;
   downloadProgress?: number;
   showRemove?: boolean;
+  selectionMode?: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (item: MediaItem) => void;
   onPlay: (item: MediaItem) => void;
   onDownload: (item: MediaItem) => void;
   onCancelDownload?: () => void;
@@ -25,6 +28,9 @@ export default function TrackList({
   downloadingId,
   downloadProgress,
   showRemove,
+  selectionMode,
+  selectedIds,
+  onToggleSelect,
   onPlay,
   onDownload,
   onCancelDownload,
@@ -44,37 +50,53 @@ export default function TrackList({
         const active = currentId === track.id;
         const downloaded = downloadedIds.has(track.id);
         const downloading = downloadingId === track.id;
+        const selected = selectedIds?.has(track.id);
 
         return (
           <div
             key={track.id}
             className={`group flex items-center gap-4 px-4 py-2.5 rounded-md transition-colors hover:bg-white/10 ${
               active ? 'bg-white/10' : ''
-            }`}
+            } ${selected ? 'bg-spotify-green/10' : ''}`}
           >
-            <button
-              onMouseEnter={() => prefetchStream(track)}
-              onClick={() => onPlay(track)}
-              className="w-8 text-center text-spotify-light text-sm shrink-0"
-            >
-              {active && isPlaying ? (
-                <span className="flex gap-0.5 justify-center items-end h-4">
-                  {[0, 1, 2].map((n) => (
-                    <span
-                      key={n}
-                      className="w-0.5 bg-spotify-green animate-bar"
-                      style={{ animationDelay: `${n * 0.15}s`, height: '100%' }}
-                    />
-                  ))}
-                </span>
-              ) : (
-                <span className="group-hover:hidden">{i + 1}</span>
-              )}
-              <Play
-                size={14}
-                className={`hidden group-hover:block mx-auto fill-white ${active && isPlaying ? 'group-hover:hidden' : ''}`}
-              />
-            </button>
+            {selectionMode ? (
+              <button
+                type="button"
+                onClick={() => onToggleSelect?.(track)}
+                className={`w-8 h-8 shrink-0 rounded border-2 flex items-center justify-center transition-colors ${
+                  selected
+                    ? 'border-spotify-green bg-spotify-green text-black'
+                    : 'border-white/30 text-transparent hover:border-white/60'
+                }`}
+                aria-label={selected ? 'Desmarcar' : 'Marcar para exportar'}
+              >
+                {selected && <span className="text-sm font-bold leading-none">✓</span>}
+              </button>
+            ) : (
+              <button
+                onMouseEnter={() => prefetchStream(track)}
+                onClick={() => onPlay(track)}
+                className="w-8 text-center text-spotify-light text-sm shrink-0"
+              >
+                {active && isPlaying ? (
+                  <span className="flex gap-0.5 justify-center items-end h-4">
+                    {[0, 1, 2].map((n) => (
+                      <span
+                        key={n}
+                        className="w-0.5 bg-spotify-green animate-bar"
+                        style={{ animationDelay: `${n * 0.15}s`, height: '100%' }}
+                      />
+                    ))}
+                  </span>
+                ) : (
+                  <span className="group-hover:hidden">{i + 1}</span>
+                )}
+                <Play
+                  size={14}
+                  className={`hidden group-hover:block mx-auto fill-white ${active && isPlaying ? 'group-hover:hidden' : ''}`}
+                />
+              </button>
+            )}
 
             {track.artwork ? (
               <img

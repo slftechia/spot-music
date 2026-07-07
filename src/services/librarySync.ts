@@ -133,7 +133,8 @@ async function exportPart(
   partIndex: number,
   totalParts: number,
   date: string,
-  onProgress?: (p: SyncProgress) => void
+  onProgress?: (p: SyncProgress) => void,
+  label = 'biblioteca'
 ) {
   const files: Record<string, Uint8Array> = {};
   const manifest: ManifestEntry[] = [];
@@ -166,8 +167,8 @@ async function exportPart(
 
   const filename =
     totalParts === 1
-      ? `spot-music-biblioteca-${date}.zip`
-      : `spot-music-biblioteca-${date}-parte${partIndex}-de-${totalParts}.zip`;
+      ? `spot-music-${label}-${date}.zip`
+      : `spot-music-${label}-${date}-parte${partIndex}-de-${totalParts}.zip`;
 
   onProgress?.({ phase: 'saving', current: partIndex, total: totalParts, part: partIndex, parts: totalParts });
   await saveZipFile(new Blob([zipped as BlobPart], { type: 'application/zip' }), filename);
@@ -175,19 +176,25 @@ async function exportPart(
 }
 
 export async function exportLibraryZip(
-  onProgress?: (p: SyncProgress) => void
+  onProgress?: (p: SyncProgress) => void,
+  trackIds?: string[]
 ): Promise<{ count: number; filenames: string[] }> {
-  const entries = await getRawDownloads();
+  let entries = await getRawDownloads();
+  if (trackIds?.length) {
+    const idSet = new Set(trackIds);
+    entries = entries.filter((e) => idSet.has(e.track.id));
+  }
   if (entries.length === 0) {
-    throw new Error('EMPTY_LIBRARY');
+    throw new Error(trackIds?.length ? 'EMPTY_SELECTION' : 'EMPTY_LIBRARY');
   }
 
   const parts = splitIntoParts(entries);
   const date = new Date().toISOString().slice(0, 10);
+  const label = trackIds?.length ? 'selecao' : 'biblioteca';
   const filenames: string[] = [];
 
   for (let i = 0; i < parts.length; i++) {
-    const filename = await exportPart(parts[i], i + 1, parts.length, date, onProgress);
+    const filename = await exportPart(parts[i], i + 1, parts.length, date, onProgress, label);
     filenames.push(filename);
     await yieldMain();
   }

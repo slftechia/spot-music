@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Loader2, WifiOff } from 'lucide-react';
+import { CheckSquare, Download, Loader2, Square, WifiOff, X } from 'lucide-react';
 import TrackList from './TrackList';
 import LibrarySync from './LibrarySync';
 import { getAllDownloads, removeDownload } from '../services/offlineStorage';
@@ -23,6 +23,8 @@ export default function LibraryView({
 }: Props) {
   const [tracks, setTracks] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setLoading(true);
@@ -31,9 +33,38 @@ export default function LibraryView({
       .finally(() => setLoading(false));
   }, [refreshKey]);
 
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const ids = new Set(tracks.map((t) => t.id));
+      const next = new Set([...prev].filter((id) => ids.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [tracks]);
+
   const handleRemove = async (item: MediaItem) => {
     await removeDownload(item.id);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(item.id);
+      return next;
+    });
     onRefresh();
+  };
+
+  const toggleSelect = (item: MediaItem) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(item.id)) next.delete(item.id);
+      else next.add(item.id);
+      return next;
+    });
+  };
+
+  const selectAll = () => setSelectedIds(new Set(tracks.map((t) => t.id)));
+  const clearSelection = () => setSelectedIds(new Set());
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
   };
 
   return (
@@ -51,7 +82,15 @@ export default function LibraryView({
         </div>
       </div>
 
-      <LibrarySync trackCount={tracks.length} onImported={onRefresh} />
+      <LibrarySync
+        trackCount={tracks.length}
+        selectionMode={selectionMode}
+        selectedCount={selectedIds.size}
+        onImported={onRefresh}
+        onEnterSelection={() => setSelectionMode(true)}
+        onExitSelection={exitSelectionMode}
+        selectedTrackIds={[...selectedIds]}
+      />
 
       {loading ? (
         <div className="flex justify-center py-12">
@@ -68,16 +107,53 @@ export default function LibraryView({
           </p>
         </div>
       ) : (
-        <TrackList
-          tracks={tracks}
-          currentId={currentId}
-          isPlaying={isPlaying}
-          downloadedIds={new Set(tracks.map((t) => t.id))}
-          showRemove
-          onPlay={onPlayOffline}
-          onDownload={() => {}}
-          onRemove={handleRemove}
-        />
+        <>
+          {selectionMode && (
+            <div className="flex flex-wrap items-center gap-2 px-1">
+              <span className="text-sm text-spotify-light mr-auto">
+                {selectedIds.size} de {tracks.length} selecionada(s)
+              </span>
+              <button
+                type="button"
+                onClick={selectAll}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-white/20 hover:border-white/40 transition-colors"
+              >
+                <CheckSquare size={14} />
+                Todas
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-white/20 hover:border-white/40 transition-colors"
+              >
+                <Square size={14} />
+                Limpar
+              </button>
+              <button
+                type="button"
+                onClick={exitSelectionMode}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-white/20 hover:border-white/40 transition-colors"
+              >
+                <X size={14} />
+                Cancelar
+              </button>
+            </div>
+          )}
+
+          <TrackList
+            tracks={tracks}
+            currentId={currentId}
+            isPlaying={isPlaying}
+            downloadedIds={new Set(tracks.map((t) => t.id))}
+            selectionMode={selectionMode}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+            showRemove={!selectionMode}
+            onPlay={onPlayOffline}
+            onDownload={() => {}}
+            onRemove={handleRemove}
+          />
+        </>
       )}
     </div>
   );
