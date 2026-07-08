@@ -90,7 +90,7 @@ export default function App() {
       const msg = err instanceof Error && err.message === 'DOWNLOAD_TOO_LONG'
         ? downloadBlockedReason(item)
         : isMobileDevice()
-          ? 'Download falhou no celular. Baixe no PC, exporte a biblioteca e importe aqui na aba Biblioteca.'
+          ? 'Download falhou. Tente outra música (até 20 min) ou baixe no PC e importe a biblioteca.'
           : 'Erro ao baixar. Rode o app no PC (npm run dev:all) ou tente outra música.';
       alert(msg);
     } finally {

@@ -2,7 +2,7 @@ import { Download, ListMusic, Play, Trash2, X } from 'lucide-react';
 import type { MediaItem } from '../types';
 import { TYPE_LABELS } from '../types';
 import { formatTime } from '../hooks/usePlayer';
-import { prefetchStream, canDownload, DOWNLOADS_ENABLED, MAX_DOWNLOAD_SECONDS } from '../services/api';
+import { prefetchStream, canDownload, DOWNLOADS_ENABLED, getMaxDownloadSeconds } from '../services/api';
 
 interface Props {
   items: MediaItem[];
@@ -178,7 +178,16 @@ export default function SearchResults({
                       onClick={() => onDownload(item)}
                       disabled={!canDownload(item)}
                       className="flex flex-col items-center gap-0.5 p-2 text-spotify-light hover:text-white transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={canDownload(item) ? 'Baixar para offline' : `Máx. ${Math.round(MAX_DOWNLOAD_SECONDS / 3600)}h`}
+                      title={
+                        canDownload(item)
+                          ? 'Baixar para offline'
+                          : (() => {
+                              const max = getMaxDownloadSeconds();
+                              return max < 3600
+                                ? `Máx. ${Math.round(max / 60)} min`
+                                : `Máx. ${Math.round(max / 3600)}h`;
+                            })()
+                      }
                       aria-label="Baixar música"
                     >
                       <Download size={18} />

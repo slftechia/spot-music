@@ -1,8 +1,18 @@
 import type { MediaItem, SearchFilter, HomeGenreSection } from '../types';
+import { isMobileDevice } from '../utils/device';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
-export const MAX_DOWNLOAD_SECONDS = 3 * 60 * 60;
+
+/** PC: mixes longos para exportar. Celular: até 20 min (como antes). */
+export const MAX_DOWNLOAD_SECONDS_DESKTOP = 3 * 60 * 60;
+export const MAX_DOWNLOAD_SECONDS_MOBILE = 20 * 60;
+/** @deprecated Use getMaxDownloadSeconds() — mantido para imports existentes. */
+export const MAX_DOWNLOAD_SECONDS = MAX_DOWNLOAD_SECONDS_MOBILE;
 export const DOWNLOADS_ENABLED = true;
+
+export function getMaxDownloadSeconds() {
+  return isMobileDevice() ? MAX_DOWNLOAD_SECONDS_MOBILE : MAX_DOWNLOAD_SECONDS_DESKTOP;
+}
 
 export async function getSearchSuggestions(query: string) {
   const res = await fetch(`${API_BASE}/suggest?q=${encodeURIComponent(query)}`);
@@ -59,13 +69,16 @@ export function getDownloadUrl(item: MediaItem | string) {
 
 export function canDownload(item: MediaItem) {
   if (!item.duration) return true;
-  return item.duration <= MAX_DOWNLOAD_SECONDS;
+  return item.duration <= getMaxDownloadSeconds();
 }
 
 export function downloadBlockedReason(item: MediaItem) {
   if (!canDownload(item)) {
-    const hours = Math.round(MAX_DOWNLOAD_SECONDS / 3600);
-    return `Muito longo para baixar (máx. ${hours}h). Ouça online.`;
+    const max = getMaxDownloadSeconds();
+    if (max < 3600) {
+      return `No celular o limite é ${Math.round(max / 60)} min. Ouça online ou baixe no PC e importe.`;
+    }
+    return `Muito longo para baixar (máx. ${Math.round(max / 3600)}h). Ouça online.`;
   }
   return null;
 }

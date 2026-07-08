@@ -105,6 +105,18 @@ export function usePlayer() {
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(80);
 
+  const currentTrackRef = useRef<MediaItem | null>(null);
+  const isPlayingRef = useRef(false);
+  const progressRef = useRef(0);
+  const durationRef = useRef(0);
+  const toggleRef = useRef<() => void>(() => {});
+  const seekRef = useRef<(t: number) => void>(() => {});
+
+  currentTrackRef.current = currentTrack;
+  isPlayingRef.current = isPlaying;
+  progressRef.current = progress;
+  durationRef.current = duration;
+
   const stopEmbedPoll = useCallback(() => {
     if (embedPollRef.current) {
       clearInterval(embedPollRef.current);
@@ -198,7 +210,10 @@ export function usePlayer() {
   useEffect(() => {
     const audio = new Audio();
     audio.setAttribute('playsinline', 'true');
+    audio.setAttribute('webkit-playsinline', 'true');
     audio.preload = 'auto';
+    // Continuar tocando com tela apagada / outro app (PWA + Media Session)
+    (audio as HTMLAudioElement & { disableRemotePlayback?: boolean }).disableRemotePlayback = false;
     audioRef.current = audio;
 
     const onTimeUpdate = () => {
@@ -405,7 +420,11 @@ export function usePlayer() {
             const audio = audioRef.current!;
             audio.src = downloaded.blobUrl;
             audio.load();
+            // Playback com Media Session + PWA: continua com tela apagada / outro app
             await audio.play();
+            if ('mediaSession' in navigator) {
+              navigator.mediaSession.playbackState = 'playing';
+            }
           } catch {
             setIsBuffering(false);
             setIsPlaying(false);
@@ -477,6 +496,105 @@ export function usePlayer() {
       audioRef.current?.play();
     }
   }, [currentTrack, isPlaying, pause]);
+
+  toggleRef.current = toggle;
+  seekRef.current = seek;
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    const track = currentTrack;
+    if (!track) {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = 'none';
+      return;
+    }
+
+    const artwork = track.artwork
+      ? [
+          { src: track.artwork, sizes: '96x96', type: 'image/jpeg' },
+          { src: track.artwork, sizes: '256x256', type: 'image/jpeg' },
+          { src: track.artwork, sizes: '512x512', type: 'image/jpeg' },
+        ]
+      : [];
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.title,
+      artist: track.artist || 'Spot Music',
+      album: 'Spot Music',
+      artwork,
+    });
+
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+    const actionHandlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ['play', () => toggleRef.current()],
+      ['pause', () => toggleRef.current()],
+      ['seekto', (details) => {
+        if (typeof details.seekTime === 'number') seekRef.current(details.seekTime);
+      }],
+      ['seekbackward', (details) => {
+        const off = details.seekOffset ?? 10;
+        seekRef.current(Math.max(0, progressRef.current - off));
+      }],
+      ['seekforward', (details) => {
+        const off = details.seekOffset ?? 10;
+        const max = durationRef.current || Number.POSITIVE_INFINITY;
+        seekRef.current(Math.min(max, progressRef.current + off));
+      }],
+      ['stop', () => {
+        pause();
+        if (audioRef.current) audioRef.current.currentTime = 0;
+        setProgress(0);
+      }],
+    ];
+
+    for (const [action, handler] of actionHandlers) {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch {
+        // ação não suportada neste navegador
+      }
+    }
+
+    return () => {
+      for (const [action] of actionHandlers) {
+        try {
+          navigator.mediaSession.setActionHandler(action, null);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, [currentTrack, isPlaying, pause]);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !currentTrack) return;
+    if (!duration || !isFinite(duration) || duration <= 0) return;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration,
+        playbackRate: 1,
+        position: Math.min(Math.max(0, progress), duration),
+      });
+    } catch {
+      /* ignore */
+    }
+  }, [currentTrack, duration, progress, isPlaying]);
+
+  // Android: manter áudio offline ao minimizar / apagar tela (já via Media Session + HTMLAudioElement)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== 'hidden') return;
+      if (!isPlayingRef.current) return;
+      // Garante que modo áudio não pause ao ir para background
+      if (modeRef.current === 'audio' && audioRef.current?.paused) {
+        void audioRef.current.play().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   const setVolumeLevel = useCallback((v: number) => {
     setVolume(Math.round(v * 100));

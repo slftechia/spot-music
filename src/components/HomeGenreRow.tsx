@@ -1,6 +1,6 @@
 import { Download, Play, X } from 'lucide-react';
 import type { MediaItem } from '../types';
-import { canDownload, DOWNLOADS_ENABLED, MAX_DOWNLOAD_SECONDS } from '../services/api';
+import { canDownload, DOWNLOADS_ENABLED, getMaxDownloadSeconds } from '../services/api';
 
 interface Props {
   title: string;
@@ -102,7 +102,14 @@ export default function HomeGenreRow({
                         onClick={() => onDownload(item)}
                         disabled={!canDownload(item)}
                         className="flex items-center gap-1 text-spotify-light hover:text-white disabled:opacity-30 text-[10px]"
-                        title={canDownload(item) ? 'Baixar' : `Máx. ${Math.round(MAX_DOWNLOAD_SECONDS / 3600)}h`}
+                        title={
+                          canDownload(item)
+                            ? 'Baixar'
+                            : (() => {
+                                const max = getMaxDownloadSeconds();
+                                return max < 3600 ? `Máx. ${Math.round(max / 60)} min` : `Máx. ${Math.round(max / 3600)}h`;
+                              })()
+                        }
                       >
                         <Download size={14} />
                         Baixar
