@@ -412,42 +412,21 @@ export function usePlayer() {
     };
 
     try {
-      await prepareStream(item).catch(() => {});
+      // Não bloqueia antes do play(): chamar play() cedo reduz a chance do Chrome pedir “Play” manualmente.
+      void prepareStream(item).catch(() => {});
 
       const sources = [getAudioProxyUrl(item), getStreamUrl(item)];
       let lastErr: unknown;
 
-      const loadAttempt = (src: string) =>
-        new Promise<void>((resolve, reject) => {
-          let settled = false;
-          const finish = (fn: () => void) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            fn();
-          };
-          const onError = () => finish(() => reject(new Error('audio-load')));
-          const onReady = () => finish(() => resolve());
-          const cleanup = () => {
-            audio.removeEventListener('error', onError);
-            audio.removeEventListener('canplay', onReady);
-            audio.removeEventListener('loadeddata', onReady);
-          };
-          audio.addEventListener('error', onError);
-          audio.addEventListener('canplay', onReady);
-          audio.addEventListener('loadeddata', onReady);
-          audio.src = src;
-          audio.load();
-          setTimeout(() => {
-            if (audio.readyState >= 2) onReady();
-            else onError();
-          }, 12000);
-        });
-
       for (const src of sources) {
         try {
-          await loadAttempt(src);
+          modeRef.current = 'audio';
+          setError(null);
+          setIsBuffering(true);
+          setIsPlaying(false);
 
+          audio.src = src;
+          audio.load();
           if (startAt > 0) {
             try {
               audio.currentTime = startAt;
@@ -458,8 +437,7 @@ export function usePlayer() {
           }
 
           await audio.play();
-          setIsPlaying(true);
-          setIsBuffering(false);
+          // estado final é atualizado por eventos ('play', 'waiting', 'error')
           if ('mediaSession' in navigator) {
             navigator.mediaSession.playbackState = 'playing';
           }
