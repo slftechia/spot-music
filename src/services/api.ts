@@ -53,13 +53,20 @@ export async function prepareStream(item: MediaItem | string): Promise<void> {
   }
 }
 
-export function prefetchStream(_item: MediaItem) {
-  // Playback usa YouTube IFrame no cliente — sem prefetch no servidor
+export function prefetchStream(item: MediaItem) {
+  // Prepara URL de áudio no servidor para tocar em background no celular
+  void prepareStream(item).catch(() => {});
 }
 
 export function getStreamUrl(item: MediaItem | string) {
   const id = typeof item === 'string' ? item : item.id;
   return `${API_BASE}/youtube/stream/${id}`;
+}
+
+/** Proxy same-origin — melhor para <audio> com Media Session / background */
+export function getAudioProxyUrl(item: MediaItem | string) {
+  const id = typeof item === 'string' ? item : item.id;
+  return `${API_BASE}/youtube/download/${id}`;
 }
 
 export function getDownloadUrl(item: MediaItem | string) {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
-import { needsPlaylistOpen } from '../services/api';
+import { getAudioProxyUrl, needsPlaylistOpen, prepareStream } from '../services/api';
 import { getDownloadedTrack } from '../services/offlineStorage';
 import { isMobileDevice } from '../utils/device';
 import {
@@ -77,8 +77,9 @@ function mountMobileEmbed(videoId: string): HTMLIFrameElement | null {
 
   host.replaceChildren();
   const iframe = document.createElement('iframe');
-  iframe.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
+  iframe.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture; fullscreen');
   iframe.setAttribute('allowfullscreen', 'true');
+  iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
   iframe.title = 'YouTube player';
   iframe.className = 'absolute inset-0 w-full h-full border-0';
   iframe.src = buildEmbedUrl(videoId, true);
@@ -375,6 +376,60 @@ export function usePlayer() {
     });
   }, [startEmbedPoll]);
 
+  const playMobileAudioStream = useCallback(async (item: MediaItem) => {
+    modeRef.current = 'audio';
+    ytRef.current?.pauseVideo();
+    if (embedIframeRef.current) {
+      embedIframeRef.current.remove();
+      embedIframeRef.current = null;
+    }
+    stopEmbedPoll();
+
+    const audio = audioRef.current!;
+    const fallbackToEmbed = () => {
+      modeRef.current = 'youtube-embed';
+      setError(null);
+      setIsBuffering(true);
+      playMobileYoutube(item.id);
+    };
+
+    try {
+      await prepareStream(item).catch(() => {});
+      await new Promise<void>((resolve, reject) => {
+        const onError = () => {
+          cleanup();
+          reject(new Error('audio-load'));
+        };
+        const onReady = () => {
+          cleanup();
+          resolve();
+        };
+        const cleanup = () => {
+          audio.removeEventListener('error', onError);
+          audio.removeEventListener('canplay', onReady);
+          audio.removeEventListener('loadeddata', onReady);
+        };
+        audio.addEventListener('error', onError);
+        audio.addEventListener('canplay', onReady);
+        audio.addEventListener('loadeddata', onReady);
+        audio.src = getAudioProxyUrl(item);
+        audio.load();
+        // Timeout: Render/YouTube às vezes demora ou falha
+        setTimeout(() => {
+          if (audio.readyState >= 2) onReady();
+          else onError();
+        }, 12000);
+      });
+      await audio.play();
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
+    } catch {
+      // Stream/API falhou → embed (menos ideal em background, mas toca)
+      fallbackToEmbed();
+    }
+  }, [playMobileYoutube, stopEmbedPoll]);
+
   const play = useCallback(
     (item: MediaItem, offline = false) => {
       if (needsPlaylistOpen(item)) return;
@@ -420,7 +475,6 @@ export function usePlayer() {
             const audio = audioRef.current!;
             audio.src = downloaded.blobUrl;
             audio.load();
-            // Playback com Media Session + PWA: continua com tela apagada / outro app
             await audio.play();
             if ('mediaSession' in navigator) {
               navigator.mediaSession.playbackState = 'playing';
@@ -437,15 +491,15 @@ export function usePlayer() {
       audioRef.current?.pause();
 
       if (MOBILE) {
-        modeRef.current = 'youtube-embed';
-        playMobileYoutube(item.id);
+        // Áudio nativo = background com Waze/tela apagada; embed só se o stream falhar
+        void playMobileAudioStream(item);
         return;
       }
 
       modeRef.current = 'youtube';
       playDesktopYoutube(item.id);
     },
-    [currentTrack, isPlaying, playDesktopYoutube, playMobileYoutube]
+    [currentTrack, isPlaying, playDesktopYoutube, playMobileAudioStream]
   );
 
   const pause = useCallback(() => {
