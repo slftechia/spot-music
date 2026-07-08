@@ -118,6 +118,13 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
+      {/* Áudio nativo no DOM: continua tocando ao sair do app (como YouTube), até pausar ou fechar */}
+      <audio
+        id="spot-audio-player"
+        playsInline
+        preload="auto"
+        className="hidden"
+      />
       <div
         id="yt-embed-host"
         className="fixed bottom-[122px] left-3 w-16 h-10 z-40 overflow-hidden rounded opacity-[0.02] pointer-events-none md:hidden"

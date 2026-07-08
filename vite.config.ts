@@ -6,9 +6,9 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      // Atualiza automaticamente ao abrir pelo ícone (sem precisar usar a URL).
-      // Evita ficar preso em versão antiga do cache.
-      registerType: 'autoUpdate',
+      // prompt = não recarrega a página sozinho no meio da música.
+      // O app aplica a atualização ao abrir o ícone quando nada estiver tocando.
+      registerType: 'prompt',
       injectRegister: null,
       includeAssets: ['favicon.svg', 'favicon.png', 'apple-touch-icon.png', 'pwa-192.png', 'pwa-512.png'],
       manifest: {

@@ -219,41 +219,70 @@ export function usePlayer() {
   }, [handleEmbedMessage]);
 
   useEffect(() => {
-    const audio = new Audio();
+    // Preferir o <audio> do DOM (continua no Android como o YouTube Music)
+    // Fallback: criar elemento se faltar (HMR / testes)
+    let audio = document.getElementById('spot-audio-player') as HTMLAudioElement | null;
+    let created = false;
+    if (!audio) {
+      audio = new Audio();
+      audio.id = 'spot-audio-player';
+      created = true;
+    }
     audio.setAttribute('playsinline', 'true');
     audio.setAttribute('webkit-playsinline', 'true');
     audio.preload = 'auto';
-    // Continuar tocando com tela apagada / outro app (PWA + Media Session)
     (audio as HTMLAudioElement & { disableRemotePlayback?: boolean }).disableRemotePlayback = false;
     audioRef.current = audio;
 
     const onTimeUpdate = () => {
-      if (modeRef.current === 'audio') setProgress(audio.currentTime);
+      if (modeRef.current === 'audio') setProgress(audio!.currentTime);
     };
     const onDurationChange = () => {
-      if (modeRef.current === 'audio' && audio.duration && isFinite(audio.duration)) {
-        setDuration(audio.duration);
+      if (modeRef.current === 'audio' && audio!.duration && isFinite(audio!.duration)) {
+        setDuration(audio!.duration);
       }
     };
     const onEnded = () => {
+      wantPlayingRef.current = false;
       setIsPlaying(false);
       setIsBuffering(false);
       stopTick();
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'none';
+      }
     };
     const onPlay = () => {
       if (modeRef.current === 'audio') {
+        wantPlayingRef.current = true;
         setIsPlaying(true);
         setIsBuffering(false);
+        setError(null);
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'playing';
+        }
       }
     };
     const onPause = () => {
       if (modeRef.current !== 'audio') return;
-      // Chrome/Android pausa o áudio ao ir pra home — não trate como pause do usuário
-      if (wantPlayingRef.current && document.visibilityState === 'hidden') {
-        void audio.play().catch(() => {});
+      // Chrome/Android pode emitir pause ao ir pra home — retomamos se a intenção era tocar
+      if (wantPlayingRef.current) {
+        // Retomar tanto se a aba estiver oculta quanto logo após o pause do sistema
+        const tryResume = () => {
+          if (!wantPlayingRef.current || modeRef.current !== 'audio') return;
+          if (audio && audio.paused) {
+            void audio.play().catch(() => {});
+          }
+        };
+        tryResume();
+        setTimeout(tryResume, 80);
+        setTimeout(tryResume, 300);
+        setTimeout(tryResume, 800);
         return;
       }
       setIsPlaying(false);
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
     };
     const onWaiting = () => {
       if (modeRef.current === 'audio') setIsBuffering(true);
@@ -263,9 +292,20 @@ export function usePlayer() {
     };
     const onError = () => {
       if (modeRef.current === 'audio') {
-        setIsBuffering(false);
-        setIsPlaying(false);
-        setError('Erro ao reproduzir offline.');
+        // Offline blob corrompido / stream falhou
+        if (wantPlayingRef.current && offlineModeRef.current) {
+          setIsBuffering(false);
+          setIsPlaying(false);
+          setError('Erro ao reproduzir offline.');
+          wantPlayingRef.current = false;
+        } else if (wantPlayingRef.current) {
+          // stream online: deixa o fluxo de fallback do play() tratar
+          setIsBuffering(false);
+        } else {
+          setIsBuffering(false);
+          setIsPlaying(false);
+          setError('Erro ao reproduzir offline.');
+        }
       }
     };
 
@@ -335,8 +375,20 @@ export function usePlayer() {
     return () => {
       stopTick();
       stopEmbedPoll();
-      audio.pause();
-      audio.src = '';
+      audio!.removeEventListener('timeupdate', onTimeUpdate);
+      audio!.removeEventListener('durationchange', onDurationChange);
+      audio!.removeEventListener('ended', onEnded);
+      audio!.removeEventListener('play', onPlay);
+      audio!.removeEventListener('pause', onPause);
+      audio!.removeEventListener('waiting', onWaiting);
+      audio!.removeEventListener('canplay', onCanPlay);
+      audio!.removeEventListener('error', onError);
+      // Não pause/destroy o áudio no cleanup se ainda queremos tocar
+      // (StrictMode/HMR). Só limpa se criamos o elemento.
+      if (created) {
+        audio!.pause();
+        audio!.src = '';
+      }
       ytRef.current?.destroy();
       ytRef.current = null;
       ytReady.current = false;
@@ -494,22 +546,40 @@ export function usePlayer() {
 
       if (offline) {
         modeRef.current = 'audio';
+        offlineModeRef.current = true;
+        wantPlayingRef.current = true;
         ytRef.current?.pauseVideo();
         if (embedIframeRef.current) {
           embedIframeRef.current.remove();
           embedIframeRef.current = null;
         }
+        stopEmbedPoll();
         void (async () => {
           try {
             const downloaded = await getDownloadedTrack(item.id);
             if (!downloaded?.blobUrl) throw new Error('offline');
             const audio = audioRef.current!;
+            // Mesmo padrão do YouTube: HTMLAudio no DOM + Media Session
+            if ('mediaSession' in navigator) {
+              navigator.mediaSession.metadata = new MediaMetadata({
+                title: item.title,
+                artist: item.artist || 'Spot Music',
+                album: 'Spot Music',
+                artwork: item.artwork
+                  ? [
+                      { src: item.artwork, sizes: '96x96', type: 'image/jpeg' },
+                      { src: item.artwork, sizes: '256x256', type: 'image/jpeg' },
+                      { src: item.artwork, sizes: '512x512', type: 'image/jpeg' },
+                    ]
+                  : [],
+              });
+              navigator.mediaSession.playbackState = 'playing';
+            }
             audio.src = downloaded.blobUrl;
             audio.load();
             await audio.play();
-            if ('mediaSession' in navigator) {
-              navigator.mediaSession.playbackState = 'playing';
-            }
+            setIsPlaying(true);
+            setIsBuffering(false);
           } catch {
             wantPlayingRef.current = false;
             setIsBuffering(false);
@@ -531,7 +601,7 @@ export function usePlayer() {
       modeRef.current = 'youtube';
       playDesktopYoutube(item.id);
     },
-    [currentTrack, isPlaying, playDesktopYoutube, playMobileAudioStream]
+    [currentTrack, isPlaying, playDesktopYoutube, playMobileAudioStream, stopEmbedPoll]
   );
 
   const pause = useCallback(() => {
@@ -671,24 +741,31 @@ export function usePlayer() {
   }, [currentTrack, duration, progress, isPlaying]);
 
   // Continuar tocando ao ir pra tela inicial / outro app / tela apagada
+  // Offline (HTMLAudio) deve se comportar como o YouTube: só para se o usuário pausar/fechar.
   useEffect(() => {
     if (!MOBILE) return;
+
+    const resumeOfflineAudio = () => {
+      if (!wantPlayingRef.current) return;
+      if (modeRef.current !== 'audio') return;
+      const audio = audioRef.current;
+      if (audio?.paused) {
+        void audio.play().catch(() => {});
+      }
+    };
 
     const resumeInBackground = () => {
       if (!wantPlayingRef.current || bgResumeBusy.current) return;
       const track = currentTrackRef.current;
       if (!track) return;
 
-      // Já em áudio nativo: só retomar se o sistema pausou
+      // Offline / áudio nativo: só retomar (não redescarregar)
       if (modeRef.current === 'audio') {
-        const audio = audioRef.current;
-        if (audio?.paused) {
-          void audio.play().catch(() => {});
-        }
+        resumeOfflineAudio();
         return;
       }
 
-      // Embed/YouTube: migrar para áudio nativo (único modo estável no background)
+      // Embed online: tentar migrar para áudio nativo
       if (modeRef.current === 'youtube-embed' || modeRef.current === 'youtube') {
         bgResumeBusy.current = true;
         const startAt = progressRef.current || 0;
@@ -698,28 +775,28 @@ export function usePlayer() {
         }
         void (async () => {
           try {
-            if (offlineModeRef.current) {
-              const downloaded = await getDownloadedTrack(track.id);
-              if (downloaded?.blobUrl) {
-                modeRef.current = 'audio';
-                if (embedIframeRef.current) {
-                  embedIframeRef.current.remove();
-                  embedIframeRef.current = null;
-                }
-                const audio = audioRef.current!;
-                audio.src = downloaded.blobUrl;
-                audio.load();
-                if (startAt > 0) {
-                  try {
-                    audio.currentTime = startAt;
-                  } catch {
-                    /* ignore */
-                  }
-                }
-                await audio.play();
-                setIsPlaying(true);
-                return;
+            // Preferir blob offline se a faixa estiver baixada
+            const downloaded = await getDownloadedTrack(track.id);
+            if (downloaded?.blobUrl) {
+              modeRef.current = 'audio';
+              offlineModeRef.current = true;
+              if (embedIframeRef.current) {
+                embedIframeRef.current.remove();
+                embedIframeRef.current = null;
               }
+              const audio = audioRef.current!;
+              audio.src = downloaded.blobUrl;
+              audio.load();
+              if (startAt > 0) {
+                try {
+                  audio.currentTime = startAt;
+                } catch {
+                  /* ignore */
+                }
+              }
+              await audio.play();
+              setIsPlaying(true);
+              return;
             }
             await playMobileAudioStreamRef.current(track, startAt);
           } finally {
@@ -731,7 +808,7 @@ export function usePlayer() {
 
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        // Pequeno atraso: Chrome às vezes dispara pause logo após hide
+        resumeOfflineAudio();
         setTimeout(resumeInBackground, 120);
         setTimeout(resumeInBackground, 500);
         setTimeout(resumeInBackground, 1500);
@@ -739,10 +816,12 @@ export function usePlayer() {
     };
 
     const onPageHide = () => {
+      resumeOfflineAudio();
       resumeInBackground();
     };
 
     const onFreeze = () => {
+      resumeOfflineAudio();
       resumeInBackground();
     };
 
