@@ -18,6 +18,7 @@ import {
 import type { MediaItem, View } from './types';
 import { needsPlaylistOpen, downloadBlockedReason } from './services/api';
 import { isMobileDevice } from './utils/device';
+import { requestPersistentStorage } from './services/persistentStorage';
 
 export default function App() {
   const [view, setView] = useState<View>('home');
@@ -40,6 +41,11 @@ export default function App() {
   useEffect(() => {
     refreshDownloads();
   }, [refreshDownloads]);
+
+  // Protege IndexedDB contra limpeza automática do Chrome
+  useEffect(() => {
+    void requestPersistentStorage();
+  }, []);
 
   useEffect(() => {
     const onOnline = () => setOnline(true);

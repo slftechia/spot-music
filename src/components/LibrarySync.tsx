@@ -139,6 +139,10 @@ export default function LibrarySync({
             ? 'Importe o .zip do PC (pode ser grande — use Wi‑Fi e aguarde). Bibliotecas grandes vêm em várias partes.'
             : 'Marque as músicas que quer levar, exporte o .zip e importe no celular.'}
         </p>
+        <p className="text-[11px] text-amber-300/90 mt-2 leading-relaxed">
+          Não desinstale o app para atualizar — a atualização é automática. Desinstalar pode apagar a biblioteca.
+          Exporte o .zip e guarde no Drive como backup.
+        </p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">

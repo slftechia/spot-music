@@ -30,6 +30,9 @@ export default function InstallApp({
             <div>
               <h2 className="text-lg font-bold">Instalar Spot Music</h2>
               <p className="text-sm text-spotify-light">Abra direto da tela inicial, sem link.</p>
+              <p className="text-[11px] text-amber-300/90 mt-1">
+                Depois de instalado, não desinstale para atualizar — a atualização é automática. Desinstalar pode apagar suas músicas.
+              </p>
             </div>
           </div>
           <button
