@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
 import { getOnlineAudioSources, needsPlaylistOpen, warmStreamCache } from '../services/api';
+import { bufferOnlineAudio, revokeOnlineBlob } from '../services/streamBuffer';
 import { getDownloadedTrack } from '../services/offlineStorage';
 import { isMobileDevice } from '../utils/device';
 import {
@@ -51,6 +52,24 @@ declare global {
 
 const MOBILE = isMobileDevice();
 const BUFFERING_TIMEOUT_MS = 12000;
+
+function applyMediaSession(track: MediaItem, playing: boolean) {
+  if (!('mediaSession' in navigator)) return;
+  const artwork = track.artwork
+    ? [
+        { src: track.artwork, sizes: '96x96', type: 'image/jpeg' },
+        { src: track.artwork, sizes: '256x256', type: 'image/jpeg' },
+        { src: track.artwork, sizes: '512x512', type: 'image/jpeg' },
+      ]
+    : [];
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: track.title,
+    artist: track.artist || 'Spot Music',
+    album: 'Spot Music',
+    artwork,
+  });
+  navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+}
 
 let ytApiPromise: Promise<void> | null = null;
 
@@ -129,6 +148,8 @@ export function usePlayer() {
   const playMobileAudioStreamRef = useRef<(item: MediaItem, startAt?: number) => Promise<void>>(
     async () => {}
   );
+  const onlineBlobAbortRef = useRef<AbortController | null>(null);
+  const memoryBlobRef = useRef(false);
   const backHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canBackGuard = useCallback(() => {
@@ -415,22 +436,21 @@ export function usePlayer() {
       if (modeRef.current === 'audio') setIsBuffering(false);
     };
     const onError = () => {
-      if (modeRef.current === 'audio') {
-        // Offline blob corrompido / stream falhou
-        if (wantPlayingRef.current && offlineModeRef.current) {
-          setIsBuffering(false);
-          setIsPlaying(false);
-          setError('Erro ao reproduzir offline.');
-          wantPlayingRef.current = false;
-        } else if (wantPlayingRef.current) {
-          // stream online: deixa o fluxo de fallback do play() tratar
-          setIsBuffering(false);
-        } else {
-          setIsBuffering(false);
-          setIsPlaying(false);
-          setError('Erro ao reproduzir offline.');
-        }
+      if (modeRef.current !== 'audio') return;
+      if (wantPlayingRef.current && (offlineModeRef.current || memoryBlobRef.current)) {
+        setIsBuffering(false);
+        setIsPlaying(false);
+        setError('Erro ao reproduzir.');
+        wantPlayingRef.current = false;
+        return;
       }
+      if (wantPlayingRef.current) {
+        setIsBuffering(false);
+        return;
+      }
+      setIsBuffering(false);
+      setIsPlaying(false);
+      setError('Erro ao reproduzir.');
     };
 
     audio.addEventListener('timeupdate', onTimeUpdate);
@@ -600,10 +620,47 @@ export function usePlayer() {
       setIsBuffering(true);
       setIsPlaying(false);
 
-      // Prefetch no toque + espera curta: URL no cache antes do <audio> pedir bytes
       await warmStreamCache(item);
+      applyMediaSession(item, true);
 
-      // Proxy same-origin no mobile (não para no Home/Voltar); CDN no desktop
+      // Mobile: buffer em memória (como offline) — única forma estável no Home/recentes
+      if (MOBILE) {
+        onlineBlobAbortRef.current?.abort();
+        const ac = new AbortController();
+        onlineBlobAbortRef.current = ac;
+
+        try {
+          const blobUrl = await bufferOnlineAudio(item, { signal: ac.signal });
+          if (!wantPlayingRef.current || ac.signal.aborted) return;
+
+          modeRef.current = 'audio';
+          memoryBlobRef.current = true;
+          offlineModeRef.current = false;
+          audio.src = blobUrl;
+          audio.load();
+          if (startAt > 0) {
+            try {
+              audio.currentTime = startAt;
+            } catch {
+              /* ignore */
+            }
+            setProgress(startAt);
+          }
+
+          await audio.play();
+          navigator.mediaSession.playbackState = 'playing';
+          setIsBuffering(false);
+          return;
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+          memoryBlobRef.current = false;
+          // Faixa muito longa ou falha no buffer — tenta stream direto
+        }
+      }
+
+      memoryBlobRef.current = false;
+
+      // Desktop (ou fallback mobile): stream HTTP
       const sources = getOnlineAudioSources(item);
       let lastErr: unknown;
 
@@ -644,6 +701,11 @@ export function usePlayer() {
   const play = useCallback(
     (item: MediaItem, offline = false) => {
       if (needsPlaylistOpen(item)) return;
+
+      if (currentTrack && currentTrack.id !== item.id) {
+        onlineBlobAbortRef.current?.abort();
+        revokeOnlineBlob(currentTrack.id);
+      }
 
       if (currentTrack?.id === item.id) {
         if (isPlaying) {
