@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
-import { getAudioProxyUrl, needsPlaylistOpen, prepareStream } from '../services/api';
+import { getAudioProxyUrl, getStreamUrl, needsPlaylistOpen, prepareStream } from '../services/api';
 import { getDownloadedTrack } from '../services/offlineStorage';
 import { isMobileDevice } from '../utils/device';
 import {
@@ -413,47 +413,63 @@ export function usePlayer() {
 
     try {
       await prepareStream(item).catch(() => {});
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const finish = (fn: () => void) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          fn();
-        };
-        const onError = () => finish(() => reject(new Error('audio-load')));
-        const onReady = () => finish(() => resolve());
-        const cleanup = () => {
-          audio.removeEventListener('error', onError);
-          audio.removeEventListener('canplay', onReady);
-          audio.removeEventListener('loadeddata', onReady);
-        };
-        audio.addEventListener('error', onError);
-        audio.addEventListener('canplay', onReady);
-        audio.addEventListener('loadeddata', onReady);
-        audio.src = getAudioProxyUrl(item);
-        audio.load();
-        setTimeout(() => {
-          if (audio.readyState >= 2) onReady();
-          else onError();
-        }, 12000);
-      });
 
-      if (startAt > 0) {
+      const sources = [getAudioProxyUrl(item), getStreamUrl(item)];
+      let lastErr: unknown;
+
+      const loadAttempt = (src: string) =>
+        new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const finish = (fn: () => void) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            fn();
+          };
+          const onError = () => finish(() => reject(new Error('audio-load')));
+          const onReady = () => finish(() => resolve());
+          const cleanup = () => {
+            audio.removeEventListener('error', onError);
+            audio.removeEventListener('canplay', onReady);
+            audio.removeEventListener('loadeddata', onReady);
+          };
+          audio.addEventListener('error', onError);
+          audio.addEventListener('canplay', onReady);
+          audio.addEventListener('loadeddata', onReady);
+          audio.src = src;
+          audio.load();
+          setTimeout(() => {
+            if (audio.readyState >= 2) onReady();
+            else onError();
+          }, 12000);
+        });
+
+      for (const src of sources) {
         try {
-          audio.currentTime = startAt;
-        } catch {
-          /* ignore */
+          await loadAttempt(src);
+
+          if (startAt > 0) {
+            try {
+              audio.currentTime = startAt;
+            } catch {
+              /* ignore */
+            }
+            setProgress(startAt);
+          }
+
+          await audio.play();
+          setIsPlaying(true);
+          setIsBuffering(false);
+          if ('mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = 'playing';
+          }
+          return;
+        } catch (err) {
+          lastErr = err;
         }
-        setProgress(startAt);
       }
 
-      await audio.play();
-      setIsPlaying(true);
-      setIsBuffering(false);
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = 'playing';
-      }
+      throw lastErr || new Error('audio-load');
     } catch {
       fallbackToEmbed();
     }
