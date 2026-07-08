@@ -19,6 +19,7 @@ interface Props {
   duration: number;
   volume: number;
   isMobile?: boolean;
+  backHint?: boolean;
   onToggle: () => void;
   onSeek: (time: number) => void;
   onSeekStart?: () => void;
@@ -36,6 +37,7 @@ export default function Player({
   duration,
   volume,
   isMobile,
+  backHint,
   onToggle,
   onSeek,
   onSeekStart,
@@ -51,7 +53,13 @@ export default function Player({
   const showBuffering = isBuffering && !isPlaying;
 
   return (
-    <footer
+    <>
+      {isMobile && backHint && (
+        <div className="fixed bottom-[118px] left-3 right-3 z-[60] rounded-lg bg-spotify-green text-black text-xs font-medium px-3 py-2 shadow-lg text-center">
+          Para continuar ouvindo, use o botão Início (◯) — não o Voltar. A música segue na notificação.
+        </div>
+      )}
+      <footer
       className={`fixed bottom-0 left-0 right-0 z-50 bg-spotify-gray border-t border-black/40 ${
         isMobile ? 'pb-safe' : 'h-[72px] flex items-center gap-4 px-4'
       }`}
@@ -176,5 +184,6 @@ export default function Player({
         style={{ width: `${pct}%` }}
       />
     </footer>
+    </>
   );
 }

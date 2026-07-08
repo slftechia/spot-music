@@ -66,6 +66,8 @@ export default function SearchResults({
           >
             <button
               onMouseEnter={() => !isCollection && prefetchStream(item)}
+              onTouchStart={() => !isCollection && prefetchStream(item)}
+              onPointerDown={() => !isCollection && prefetchStream(item)}
               onClick={() => (isCollection ? onOpenPlaylist(item) : onPlay(item))}
               className="relative shrink-0 w-40 sm:w-56 aspect-video rounded-lg overflow-hidden bg-spotify-gray"
             >

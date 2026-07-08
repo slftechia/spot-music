@@ -247,8 +247,14 @@ const CLIENT_FALLBACKS = [
 ];
 
 async function resolveWithGetUrl(videoUrl) {
+  // Android costuma ser o mais rápido — tenta primeiro sozinho
+  const fastClients = [
+    'youtube:player_client=android',
+    ...CLIENT_FALLBACKS.filter((c) => c !== 'youtube:player_client=android,web;player_skip=webpage,configs'),
+  ];
+
   let lastErr;
-  for (const extractorArgs of CLIENT_FALLBACKS) {
+  for (const extractorArgs of fastClients) {
     try {
       const raw = await ytdlp(videoUrl, {
         ...baseYtdlpOpts(),

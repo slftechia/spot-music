@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
-import { getAudioProxyUrl, getStreamUrl, needsPlaylistOpen, prepareStream } from '../services/api';
+import { getAudioProxyUrl, getStreamUrl, needsPlaylistOpen, warmStreamCache } from '../services/api';
 import { getDownloadedTrack } from '../services/offlineStorage';
 import { isMobileDevice } from '../utils/device';
+import {
+  closeMiniPlayerPip,
+  openMiniPlayerPip,
+  updateMiniPlayerPip,
+} from '../utils/miniPlayerPip';
 import {
   buildEmbedUrl,
   parseEmbedMessage,
@@ -105,6 +110,7 @@ export function usePlayer() {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(80);
+  const [backHint, setBackHint] = useState(false);
 
   const currentTrackRef = useRef<MediaItem | null>(null);
   const isPlayingRef = useRef(false);
@@ -118,6 +124,26 @@ export function usePlayer() {
   const playMobileAudioStreamRef = useRef<(item: MediaItem, startAt?: number) => Promise<void>>(
     async () => {}
   );
+  const backHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const canBackGuard = useCallback(() => {
+    return (
+      wantPlayingRef.current &&
+      (modeRef.current === 'audio' || modeRef.current === 'youtube-embed')
+    );
+  }, []);
+
+  const ensureBackTrap = useCallback(() => {
+    if (!MOBILE || !canBackGuard()) return;
+    if (window.history.state?.spotMusicBg) return;
+    window.history.pushState({ spotMusicBg: true }, '');
+  }, [canBackGuard]);
+
+  const showBackHint = useCallback(() => {
+    setBackHint(true);
+    if (backHintTimerRef.current) clearTimeout(backHintTimerRef.current);
+    backHintTimerRef.current = setTimeout(() => setBackHint(false), 5000);
+  }, []);
 
   currentTrackRef.current = currentTrack;
   isPlayingRef.current = isPlaying;
@@ -444,7 +470,7 @@ export function usePlayer() {
     });
   }, [startEmbedPoll]);
 
-  const playMobileAudioStream = useCallback(async (item: MediaItem, startAt = 0) => {
+  const playAudioStream = useCallback(async (item: MediaItem, startAt = 0) => {
     modeRef.current = 'audio';
     offlineModeRef.current = false;
     wantPlayingRef.current = true;
@@ -456,27 +482,35 @@ export function usePlayer() {
     stopEmbedPoll();
 
     const audio = audioRef.current!;
-    const fallbackToEmbed = () => {
-      modeRef.current = 'youtube-embed';
+    const fallbackToYoutube = () => {
+      if (MOBILE) {
+        modeRef.current = 'youtube-embed';
+        setError(null);
+        setIsBuffering(true);
+        playMobileYoutube(item.id);
+        return;
+      }
+      modeRef.current = 'youtube';
       setError(null);
       setIsBuffering(true);
-      playMobileYoutube(item.id);
+      playDesktopYoutube(item.id);
     };
 
     try {
-      // Não bloqueia antes do play(): chamar play() cedo reduz a chance do Chrome pedir “Play” manualmente.
-      void prepareStream(item).catch(() => {});
+      setError(null);
+      setIsBuffering(true);
+      setIsPlaying(false);
 
-      const sources = [getAudioProxyUrl(item), getStreamUrl(item)];
+      // Prefetch no toque + espera curta: URL no cache antes do <audio> pedir bytes
+      await warmStreamCache(item);
+
+      // Redirect CDN primeiro (rápido); proxy same-origin só se falhar
+      const sources = [getStreamUrl(item), getAudioProxyUrl(item)];
       let lastErr: unknown;
 
       for (const src of sources) {
         try {
           modeRef.current = 'audio';
-          setError(null);
-          setIsBuffering(true);
-          setIsPlaying(false);
-
           audio.src = src;
           audio.load();
           if (startAt > 0) {
@@ -489,23 +523,24 @@ export function usePlayer() {
           }
 
           await audio.play();
-          // estado final é atualizado por eventos ('play', 'waiting', 'error')
           if ('mediaSession' in navigator) {
             navigator.mediaSession.playbackState = 'playing';
           }
           return;
         } catch (err) {
           lastErr = err;
+          audio.removeAttribute('src');
+          audio.load();
         }
       }
 
       throw lastErr || new Error('audio-load');
     } catch {
-      fallbackToEmbed();
+      fallbackToYoutube();
     }
-  }, [playMobileYoutube, stopEmbedPoll]);
+  }, [playDesktopYoutube, playMobileYoutube, stopEmbedPoll]);
 
-  playMobileAudioStreamRef.current = playMobileAudioStream;
+  playMobileAudioStreamRef.current = playAudioStream;
 
   const play = useCallback(
     (item: MediaItem, offline = false) => {
@@ -592,20 +627,15 @@ export function usePlayer() {
 
       audioRef.current?.pause();
 
-      if (MOBILE) {
-        // Áudio nativo = background com home/Waze/tela apagada; embed só se o stream falhar
-        void playMobileAudioStream(item);
-        return;
-      }
-
-      modeRef.current = 'youtube';
-      playDesktopYoutube(item.id);
+      // Áudio direto (CDN) — mais rápido que iframe YouTube; fallback embed/desktop
+      void playAudioStream(item);
     },
-    [currentTrack, isPlaying, playDesktopYoutube, playMobileAudioStream, stopEmbedPoll]
+    [currentTrack, isPlaying, playAudioStream, stopEmbedPoll]
   );
 
   const pause = useCallback(() => {
     wantPlayingRef.current = false;
+    closeMiniPlayerPip();
     if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
     else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
       sendEmbedCommand(embedIframeRef.current, 'pauseVideo');
@@ -812,6 +842,13 @@ export function usePlayer() {
         setTimeout(resumeInBackground, 120);
         setTimeout(resumeInBackground, 500);
         setTimeout(resumeInBackground, 1500);
+
+        const track = currentTrackRef.current;
+        if (track && wantPlayingRef.current && modeRef.current === 'audio') {
+          void openMiniPlayerPip(track, isPlayingRef.current, {
+            onToggle: () => toggleRef.current(),
+          });
+        }
       }
     };
 
@@ -834,6 +871,33 @@ export function usePlayer() {
       document.removeEventListener('freeze', onFreeze);
     };
   }, []);
+
+  // Botão Voltar do Android fecha o PWA — manter na pilha enquanto toca
+  useEffect(() => {
+    if (!MOBILE) return;
+
+    const onPopState = () => {
+      if (!canBackGuard()) return;
+      window.history.pushState({ spotMusicBg: true }, '');
+      showBackHint();
+      const audio = audioRef.current;
+      if (audio?.paused && modeRef.current === 'audio') {
+        void audio.play().catch(() => {});
+      }
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [canBackGuard, showBackHint]);
+
+  useEffect(() => {
+    if (isPlaying) ensureBackTrap();
+    else closeMiniPlayerPip();
+  }, [isPlaying, ensureBackTrap]);
+
+  useEffect(() => {
+    updateMiniPlayerPip(isPlaying);
+  }, [isPlaying]);
 
   const setVolumeLevel = useCallback((v: number) => {
     setVolume(Math.round(v * 100));
@@ -861,6 +925,7 @@ export function usePlayer() {
     seekEnd,
     toggle,
     openInYoutube,
+    backHint,
   };
 }
 

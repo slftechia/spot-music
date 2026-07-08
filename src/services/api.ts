@@ -53,9 +53,36 @@ export async function prepareStream(item: MediaItem | string): Promise<void> {
   }
 }
 
-export function prefetchStream(item: MediaItem) {
-  // Prepara URL de áudio no servidor para tocar em background no celular
-  void prepareStream(item).catch(() => {});
+const prepareInflight = new Map<string, Promise<void>>();
+
+export function prefetchStream(item: MediaItem | string) {
+  const id = typeof item === 'string' ? item : item.id;
+  if (!id) return;
+
+  const existing = prepareInflight.get(id);
+  if (existing) {
+    void existing.catch(() => {});
+    return;
+  }
+
+  const job = prepareStream(id).finally(() => {
+    prepareInflight.delete(id);
+  });
+  prepareInflight.set(id, job);
+  void job.catch(() => {});
+}
+
+/** Aguarda prepare com teto — usado no play para não bloquear demais */
+export async function warmStreamCache(item: MediaItem | string, maxWaitMs = 2200) {
+  prefetchStream(item);
+  const id = typeof item === 'string' ? item : item.id;
+  const job = prepareInflight.get(id);
+  if (!job) return;
+
+  await Promise.race([
+    job.catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, maxWaitMs)),
+  ]);
 }
 
 export function getStreamUrl(item: MediaItem | string) {

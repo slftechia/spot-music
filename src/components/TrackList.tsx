@@ -75,6 +75,8 @@ export default function TrackList({
             ) : (
               <button
                 onMouseEnter={() => prefetchStream(track)}
+                onTouchStart={() => prefetchStream(track)}
+                onPointerDown={() => prefetchStream(track)}
                 onClick={() => onPlay(track)}
                 className="w-8 text-center text-spotify-light text-sm shrink-0"
               >
@@ -109,7 +111,12 @@ export default function TrackList({
               <div className="w-10 h-10 rounded bg-spotify-gray shrink-0" />
             )}
 
-            <button onClick={() => onPlay(track)} className="flex-1 min-w-0 text-left">
+            <button
+              onTouchStart={() => prefetchStream(track)}
+              onPointerDown={() => prefetchStream(track)}
+              onClick={() => onPlay(track)}
+              className="flex-1 min-w-0 text-left"
+            >
               <p className={`text-sm font-medium truncate ${active ? 'text-spotify-green' : ''}`}>
                 {track.title}
               </p>

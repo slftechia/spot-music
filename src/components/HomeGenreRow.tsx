@@ -1,6 +1,6 @@
 import { Download, Play, X } from 'lucide-react';
 import type { MediaItem } from '../types';
-import { canDownload, DOWNLOADS_ENABLED, getMaxDownloadSeconds } from '../services/api';
+import { canDownload, DOWNLOADS_ENABLED, getMaxDownloadSeconds, prefetchStream } from '../services/api';
 
 interface Props {
   title: string;
@@ -46,6 +46,8 @@ export default function HomeGenreRow({
               }`}
             >
               <button
+                onTouchStart={() => prefetchStream(item)}
+                onPointerDown={() => prefetchStream(item)}
                 onClick={() => onPlay(item)}
                 className="relative w-full aspect-square block"
               >

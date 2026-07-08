@@ -16,7 +16,7 @@ import {
   getAllDownloads,
 } from './services/offlineStorage';
 import type { MediaItem, View } from './types';
-import { needsPlaylistOpen, downloadBlockedReason } from './services/api';
+import { needsPlaylistOpen, downloadBlockedReason, prefetchStream } from './services/api';
 import { isMobileDevice } from './utils/device';
 import { requestPersistentStorage } from './services/persistentStorage';
 
@@ -60,6 +60,8 @@ export default function App() {
 
   const handlePlay = (item: MediaItem) => {
     if (needsPlaylistOpen(item)) return;
+
+    prefetchStream(item);
 
     const offline = downloadedIds.has(item.id);
     if (!offline && !online) {
@@ -216,6 +218,7 @@ export default function App() {
         duration={player.duration}
         volume={player.volume}
         isMobile={player.isMobile}
+        backHint={player.backHint}
         onToggle={player.toggle}
         onSeek={player.seek}
         onSeekStart={player.seekStart}
