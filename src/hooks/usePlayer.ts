@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
 import { getOnlineAudioSources, needsPlaylistOpen, warmStreamCache } from '../services/api';
 import {
-  abortProgressivePlayback,
-  bufferOnlineAudio,
-  playProgressiveOnlineAudio,
+  getCachedOnlineBlob,
+  prefetchOnlineBlob,
   revokeOnlineBlob,
+  swapAudioToBlob,
 } from '../services/streamBuffer';
 import { getDownloadedTrack } from '../services/offlineStorage';
 import { isMobileDevice } from '../utils/device';
@@ -57,6 +57,7 @@ declare global {
 
 const MOBILE = isMobileDevice();
 const BUFFERING_TIMEOUT_MS = 12000;
+const BUFFERING_TIMEOUT_MOBILE_MS = 35000;
 
 function applyMediaSession(track: MediaItem, playing: boolean) {
   if (!('mediaSession' in navigator)) return;
@@ -557,10 +558,11 @@ export function usePlayer() {
 
   useEffect(() => {
     if (!isBuffering || isPlaying) return;
+    const timeout = MOBILE ? BUFFERING_TIMEOUT_MOBILE_MS : BUFFERING_TIMEOUT_MS;
     const timer = setTimeout(() => {
       setIsBuffering(false);
       setError('Não iniciou. Toque play de novo ou abra no YouTube.');
-    }, BUFFERING_TIMEOUT_MS);
+    }, timeout);
     return () => clearTimeout(timer);
   }, [isBuffering, isPlaying, currentTrack?.id]);
 
@@ -625,59 +627,90 @@ export function usePlayer() {
       setIsBuffering(true);
       setIsPlaying(false);
 
-      await warmStreamCache(item);
+      void warmStreamCache(item);
       applyMediaSession(item, true);
 
-      // Mobile: toca enquanto carrega (MSE) — estável no Home quando bufferizado
       if (MOBILE) {
         onlineBlobAbortRef.current?.abort();
-        abortProgressivePlayback(item.id);
         const ac = new AbortController();
         onlineBlobAbortRef.current = ac;
 
+        const blobJob = prefetchOnlineBlob(item, { signal: ac.signal });
+
+        const tryStreamPlay = async (src: string) => {
+          modeRef.current = 'audio';
+          memoryBlobRef.current = false;
+          offlineModeRef.current = false;
+          audio.src = src;
+          audio.load();
+          if (startAt > 0) {
+            try {
+              audio.currentTime = startAt;
+            } catch {
+              /* ignore */
+            }
+            setProgress(startAt);
+          }
+          await audio.play();
+          setIsPlaying(true);
+          setIsBuffering(false);
+          if ('mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = 'playing';
+          }
+        };
+
+        const attachBlobSwap = () => {
+          void blobJob
+            .then(async (blobUrl) => {
+              if (!wantPlayingRef.current || ac.signal.aborted) return;
+              if (currentTrackRef.current?.id !== item.id) return;
+              if (modeRef.current !== 'audio') return;
+              memoryBlobRef.current = true;
+              await swapAudioToBlob(audio, blobUrl, !userPausedRef.current);
+              setIsPlaying(!audio.paused);
+            })
+            .catch(() => {});
+        };
+
         try {
+          for (const src of getOnlineAudioSources(item)) {
+            try {
+              await tryStreamPlay(src);
+              attachBlobSwap();
+              return;
+            } catch {
+              audio.removeAttribute('src');
+              audio.load();
+            }
+          }
+        } catch {
+          /* stream falhou — usa blob abaixo */
+        }
+
+        try {
+          const blobUrl = await blobJob;
+          if (!wantPlayingRef.current || ac.signal.aborted) return;
           modeRef.current = 'audio';
           memoryBlobRef.current = true;
           offlineModeRef.current = false;
-
-          await playProgressiveOnlineAudio(item, audio, {
-            signal: ac.signal,
-            startAt,
-          });
-
-          if (!wantPlayingRef.current || ac.signal.aborted) return;
-
-          navigator.mediaSession.playbackState = 'playing';
+          audio.src = blobUrl;
+          audio.load();
+          if (startAt > 0) {
+            try {
+              audio.currentTime = startAt;
+            } catch {
+              /* ignore */
+            }
+            setProgress(startAt);
+          }
+          await audio.play();
+          setIsPlaying(true);
           setIsBuffering(false);
+          navigator.mediaSession.playbackState = 'playing';
           return;
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
           memoryBlobRef.current = false;
-
-          // MSE indisponível: espera buffer completo
-          try {
-            const blobUrl = await bufferOnlineAudio(item, { signal: ac.signal });
-            if (!wantPlayingRef.current || ac.signal.aborted) return;
-
-            modeRef.current = 'audio';
-            memoryBlobRef.current = true;
-            audio.src = blobUrl;
-            audio.load();
-            if (startAt > 0) {
-              try {
-                audio.currentTime = startAt;
-              } catch {
-                /* ignore */
-              }
-              setProgress(startAt);
-            }
-            await audio.play();
-            navigator.mediaSession.playbackState = 'playing';
-            setIsBuffering(false);
-            return;
-          } catch {
-            memoryBlobRef.current = false;
-          }
         }
       }
 
@@ -702,6 +735,8 @@ export function usePlayer() {
           }
 
           await audio.play();
+          setIsPlaying(true);
+          setIsBuffering(false);
           if ('mediaSession' in navigator) {
             navigator.mediaSession.playbackState = 'playing';
           }
@@ -727,7 +762,6 @@ export function usePlayer() {
 
       if (currentTrack && currentTrack.id !== item.id) {
         onlineBlobAbortRef.current?.abort();
-        abortProgressivePlayback(currentTrack.id);
         revokeOnlineBlob(currentTrack.id);
       }
 
@@ -979,6 +1013,28 @@ export function usePlayer() {
         migrateEmbedRef.current();
       } else {
         resumeAudioRef.current();
+        const track = currentTrackRef.current;
+        const audio = audioRef.current;
+        if (track && audio && modeRef.current === 'audio' && !memoryBlobRef.current) {
+          const cached = getCachedOnlineBlob(track.id);
+          if (cached) {
+            memoryBlobRef.current = true;
+            void swapAudioToBlob(audio, cached, !userPausedRef.current);
+          } else {
+            void prefetchOnlineBlob(track)
+              .then((blob) => {
+                if (currentTrackRef.current?.id !== track.id) return;
+                if (!audioRef.current || modeRef.current !== 'audio') return;
+                memoryBlobRef.current = true;
+                void swapAudioToBlob(
+                  audioRef.current,
+                  blob,
+                  wantPlayingRef.current && !userPausedRef.current
+                );
+              })
+              .catch(() => {});
+          }
+        }
       }
 
       const track = currentTrackRef.current;
