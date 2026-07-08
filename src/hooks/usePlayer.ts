@@ -6,6 +6,7 @@ import {
   prefetchOnlineBlob,
   revokeOnlineBlob,
   swapAudioToBlob,
+  tryAudioSource,
 } from '../services/streamBuffer';
 import { getDownloadedTrack } from '../services/offlineStorage';
 import { isMobileDevice } from '../utils/device';
@@ -627,7 +628,11 @@ export function usePlayer() {
       setIsBuffering(true);
       setIsPlaying(false);
 
-      void warmStreamCache(item);
+      // Prepara servidor (Render) mas não espera mais que 4s — senão vai direto pro embed
+      await Promise.race([
+        warmStreamCache(item, 12000),
+        new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+      ]);
       applyMediaSession(item, true);
 
       if (MOBILE) {
@@ -635,83 +640,68 @@ export function usePlayer() {
         const ac = new AbortController();
         onlineBlobAbortRef.current = ac;
 
-        const blobJob = prefetchOnlineBlob(item, { signal: ac.signal });
-
-        const tryStreamPlay = async (src: string) => {
-          modeRef.current = 'audio';
-          memoryBlobRef.current = false;
-          offlineModeRef.current = false;
-          audio.src = src;
-          audio.load();
-          if (startAt > 0) {
-            try {
-              audio.currentTime = startAt;
-            } catch {
-              /* ignore */
-            }
-            setProgress(startAt);
-          }
-          await audio.play();
-          setIsPlaying(true);
-          setIsBuffering(false);
-          if ('mediaSession' in navigator) {
-            navigator.mediaSession.playbackState = 'playing';
-          }
-        };
-
-        const attachBlobSwap = () => {
-          void blobJob
+        const scheduleBlobUpgrade = () => {
+          void prefetchOnlineBlob(item, { signal: ac.signal })
             .then(async (blobUrl) => {
               if (!wantPlayingRef.current || ac.signal.aborted) return;
               if (currentTrackRef.current?.id !== item.id) return;
-              if (modeRef.current !== 'audio') return;
-              memoryBlobRef.current = true;
-              await swapAudioToBlob(audio, blobUrl, !userPausedRef.current);
-              setIsPlaying(!audio.paused);
+              const a = audioRef.current;
+              if (!a) return;
+
+              if (modeRef.current === 'youtube-embed') {
+                const pos = progressRef.current || 0;
+                stopEmbedPoll();
+                if (embedIframeRef.current) {
+                  embedIframeRef.current.remove();
+                  embedIframeRef.current = null;
+                }
+                modeRef.current = 'audio';
+                memoryBlobRef.current = true;
+                offlineModeRef.current = false;
+                a.src = blobUrl;
+                a.load();
+                if (pos > 0) {
+                  try {
+                    a.currentTime = pos;
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                await a.play();
+                setIsPlaying(true);
+                setIsBuffering(false);
+              } else if (modeRef.current === 'audio' && !memoryBlobRef.current) {
+                memoryBlobRef.current = true;
+                await swapAudioToBlob(a, blobUrl, !userPausedRef.current);
+                setIsPlaying(!a.paused);
+              }
             })
             .catch(() => {});
         };
 
-        try {
-          for (const src of getOnlineAudioSources(item)) {
-            try {
-              await tryStreamPlay(src);
-              attachBlobSwap();
-              return;
-            } catch {
-              audio.removeAttribute('src');
-              audio.load();
+        scheduleBlobUpgrade();
+
+        for (const src of getOnlineAudioSources(item)) {
+          const ok = await tryAudioSource(audio, src, startAt, 8000);
+          if (ok && wantPlayingRef.current && !ac.signal.aborted) {
+            modeRef.current = 'audio';
+            memoryBlobRef.current = false;
+            offlineModeRef.current = false;
+            setIsPlaying(true);
+            setIsBuffering(false);
+            setError(null);
+            if ('mediaSession' in navigator) {
+              navigator.mediaSession.playbackState = 'playing';
             }
+            return;
           }
-        } catch {
-          /* stream falhou — usa blob abaixo */
+          audio.removeAttribute('src');
+          audio.load();
         }
 
-        try {
-          const blobUrl = await blobJob;
-          if (!wantPlayingRef.current || ac.signal.aborted) return;
-          modeRef.current = 'audio';
-          memoryBlobRef.current = true;
-          offlineModeRef.current = false;
-          audio.src = blobUrl;
-          audio.load();
-          if (startAt > 0) {
-            try {
-              audio.currentTime = startAt;
-            } catch {
-              /* ignore */
-            }
-            setProgress(startAt);
-          }
-          await audio.play();
-          setIsPlaying(true);
-          setIsBuffering(false);
-          navigator.mediaSession.playbackState = 'playing';
-          return;
-        } catch (err) {
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          memoryBlobRef.current = false;
-        }
+        // Áudio falhou — embed YouTube toca na hora; blob upgrade quando pronto
+        fallbackToYoutube();
+        return;
       }
 
       memoryBlobRef.current = false;

@@ -63,6 +63,44 @@ export function getImmediatePlayUrl(item: MediaItem): string {
   return getAudioProxyUrl(item);
 }
 
+/** Tenta tocar URL no <audio> com timeout — não bloqueia indefinidamente. */
+export function tryAudioSource(
+  audio: HTMLAudioElement,
+  src: string,
+  startAt: number,
+  timeoutMs = 8000
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      audio.removeEventListener('playing', onPlaying);
+      audio.removeEventListener('error', onError);
+      resolve(ok);
+    };
+
+    const onPlaying = () => finish(true);
+    const onError = () => finish(false);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    audio.addEventListener('playing', onPlaying, { once: true });
+    audio.addEventListener('error', onError, { once: true });
+
+    audio.src = src;
+    audio.load();
+    if (startAt > 0) {
+      try {
+        audio.currentTime = startAt;
+      } catch {
+        /* ignore */
+      }
+    }
+    void audio.play().catch(() => finish(false));
+  });
+}
+
 async function bufferOnlineAudio(
   item: MediaItem,
   opts?: { signal?: AbortSignal; onProgress?: (pct: number) => void }
