@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
 import { getOnlineAudioSources, needsPlaylistOpen, warmStreamCache } from '../services/api';
-import { bufferOnlineAudio, revokeOnlineBlob } from '../services/streamBuffer';
+import {
+  abortProgressivePlayback,
+  bufferOnlineAudio,
+  playProgressiveOnlineAudio,
+  revokeOnlineBlob,
+} from '../services/streamBuffer';
 import { getDownloadedTrack } from '../services/offlineStorage';
 import { isMobileDevice } from '../utils/device';
 import {
@@ -623,38 +628,56 @@ export function usePlayer() {
       await warmStreamCache(item);
       applyMediaSession(item, true);
 
-      // Mobile: buffer em memória (como offline) — única forma estável no Home/recentes
+      // Mobile: toca enquanto carrega (MSE) — estável no Home quando bufferizado
       if (MOBILE) {
         onlineBlobAbortRef.current?.abort();
+        abortProgressivePlayback(item.id);
         const ac = new AbortController();
         onlineBlobAbortRef.current = ac;
 
         try {
-          const blobUrl = await bufferOnlineAudio(item, { signal: ac.signal });
-          if (!wantPlayingRef.current || ac.signal.aborted) return;
-
           modeRef.current = 'audio';
           memoryBlobRef.current = true;
           offlineModeRef.current = false;
-          audio.src = blobUrl;
-          audio.load();
-          if (startAt > 0) {
-            try {
-              audio.currentTime = startAt;
-            } catch {
-              /* ignore */
-            }
-            setProgress(startAt);
-          }
 
-          await audio.play();
+          await playProgressiveOnlineAudio(item, audio, {
+            signal: ac.signal,
+            startAt,
+          });
+
+          if (!wantPlayingRef.current || ac.signal.aborted) return;
+
           navigator.mediaSession.playbackState = 'playing';
           setIsBuffering(false);
           return;
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
           memoryBlobRef.current = false;
-          // Faixa muito longa ou falha no buffer — tenta stream direto
+
+          // MSE indisponível: espera buffer completo
+          try {
+            const blobUrl = await bufferOnlineAudio(item, { signal: ac.signal });
+            if (!wantPlayingRef.current || ac.signal.aborted) return;
+
+            modeRef.current = 'audio';
+            memoryBlobRef.current = true;
+            audio.src = blobUrl;
+            audio.load();
+            if (startAt > 0) {
+              try {
+                audio.currentTime = startAt;
+              } catch {
+                /* ignore */
+              }
+              setProgress(startAt);
+            }
+            await audio.play();
+            navigator.mediaSession.playbackState = 'playing';
+            setIsBuffering(false);
+            return;
+          } catch {
+            memoryBlobRef.current = false;
+          }
         }
       }
 
@@ -704,6 +727,7 @@ export function usePlayer() {
 
       if (currentTrack && currentTrack.id !== item.id) {
         onlineBlobAbortRef.current?.abort();
+        abortProgressivePlayback(currentTrack.id);
         revokeOnlineBlob(currentTrack.id);
       }
 
