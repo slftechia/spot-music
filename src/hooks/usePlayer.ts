@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../types';
-import { getAudioProxyUrl, getStreamUrl, needsPlaylistOpen, warmStreamCache } from '../services/api';
+import { getOnlineAudioSources, needsPlaylistOpen, warmStreamCache } from '../services/api';
 import { getDownloadedTrack } from '../services/offlineStorage';
 import { isMobileDevice } from '../utils/device';
 import {
@@ -117,10 +117,15 @@ export function usePlayer() {
   const progressRef = useRef(0);
   const durationRef = useRef(0);
   const wantPlayingRef = useRef(false);
+  const userPausedRef = useRef(false);
   const offlineModeRef = useRef(false);
   const bgResumeBusy = useRef(false);
+  const bgKeepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastPositionSyncRef = useRef(0);
   const toggleRef = useRef<() => void>(() => {});
   const seekRef = useRef<(t: number) => void>(() => {});
+  const resumeAudioRef = useRef<() => void>(() => {});
+  const migrateEmbedRef = useRef<() => void>(() => {});
   const playMobileAudioStreamRef = useRef<(item: MediaItem, startAt?: number) => Promise<void>>(
     async () => {}
   );
@@ -150,6 +155,55 @@ export function usePlayer() {
   progressRef.current = progress;
   durationRef.current = duration;
 
+  const syncMediaSessionPlaying = useCallback(() => {
+    if (!('mediaSession' in navigator)) return;
+    if (wantPlayingRef.current && !userPausedRef.current) {
+      navigator.mediaSession.playbackState = 'playing';
+    }
+  }, []);
+
+  const resumeAudioIfNeeded = useCallback(() => {
+    if (!wantPlayingRef.current || userPausedRef.current) return;
+    if (modeRef.current !== 'audio') return;
+    const audio = audioRef.current;
+    if (!audio?.src) return;
+
+    syncMediaSessionPlaying();
+    if (!audio.paused) return;
+
+    const attempt = () => {
+      if (!wantPlayingRef.current || userPausedRef.current) return;
+      if (modeRef.current !== 'audio' || !audioRef.current?.src) return;
+      if (!audioRef.current.paused) return;
+      void audioRef.current.play().catch(() => {});
+    };
+
+    attempt();
+    setTimeout(attempt, 50);
+    setTimeout(attempt, 200);
+    setTimeout(attempt, 600);
+    setTimeout(attempt, 1500);
+  }, [syncMediaSessionPlaying]);
+
+  const stopBgKeepAlive = useCallback(() => {
+    if (bgKeepAliveRef.current) {
+      clearInterval(bgKeepAliveRef.current);
+      bgKeepAliveRef.current = null;
+    }
+  }, []);
+
+  const startBgKeepAlive = useCallback(() => {
+    if (bgKeepAliveRef.current) return;
+    bgKeepAliveRef.current = setInterval(() => {
+      if (!wantPlayingRef.current || userPausedRef.current) {
+        stopBgKeepAlive();
+        return;
+      }
+      syncMediaSessionPlaying();
+      resumeAudioIfNeeded();
+    }, 2000);
+  }, [resumeAudioIfNeeded, stopBgKeepAlive, syncMediaSessionPlaying]);
+
   const stopEmbedPoll = useCallback(() => {
     if (embedPollRef.current) {
       clearInterval(embedPollRef.current);
@@ -165,6 +219,50 @@ export function usePlayer() {
       sendEmbedCommand(embedIframeRef.current, 'getCurrentTime');
       sendEmbedCommand(embedIframeRef.current, 'getDuration');
     }, 1000);
+  }, [stopEmbedPoll]);
+
+  const migrateEmbedToAudio = useCallback(() => {
+    if (!MOBILE || bgResumeBusy.current) return;
+    if (!wantPlayingRef.current || userPausedRef.current) return;
+    const track = currentTrackRef.current;
+    if (!track) return;
+    if (modeRef.current !== 'youtube-embed' && modeRef.current !== 'youtube') return;
+
+    bgResumeBusy.current = true;
+    const startAt = progressRef.current || 0;
+    if (embedIframeRef.current) {
+      sendEmbedCommand(embedIframeRef.current, 'pauseVideo');
+    }
+    void (async () => {
+      try {
+        const downloaded = await getDownloadedTrack(track.id);
+        if (downloaded?.blobUrl) {
+          modeRef.current = 'audio';
+          offlineModeRef.current = true;
+          if (embedIframeRef.current) {
+            embedIframeRef.current.remove();
+            embedIframeRef.current = null;
+          }
+          stopEmbedPoll();
+          const audio = audioRef.current!;
+          audio.src = downloaded.blobUrl;
+          audio.load();
+          if (startAt > 0) {
+            try {
+              audio.currentTime = startAt;
+            } catch {
+              /* ignore */
+            }
+          }
+          await audio.play();
+          setIsPlaying(true);
+          return;
+        }
+        await playMobileAudioStreamRef.current(track, startAt);
+      } finally {
+        bgResumeBusy.current = false;
+      }
+    })();
   }, [stopEmbedPoll]);
 
   const stopTick = useCallback(() => {
@@ -198,8 +296,9 @@ export function usePlayer() {
         setError(null);
         startEmbedPoll();
       } else if (state === YT_STATE.PAUSED) {
-        // Sistema pausa o embed ao ir pra home — manter intenção e migrar para áudio
-        if (wantPlayingRef.current && document.visibilityState === 'hidden') {
+        // Sistema pausa o embed ao ir pra home — migrar para áudio nativo
+        if (wantPlayingRef.current && !userPausedRef.current) {
+          migrateEmbedRef.current();
           return;
         }
         setIsPlaying(false);
@@ -270,6 +369,7 @@ export function usePlayer() {
     };
     const onEnded = () => {
       wantPlayingRef.current = false;
+      userPausedRef.current = false;
       setIsPlaying(false);
       setIsBuffering(false);
       stopTick();
@@ -279,6 +379,7 @@ export function usePlayer() {
     };
     const onPlay = () => {
       if (modeRef.current === 'audio') {
+        userPausedRef.current = false;
         wantPlayingRef.current = true;
         setIsPlaying(true);
         setIsBuffering(false);
@@ -290,19 +391,16 @@ export function usePlayer() {
     };
     const onPause = () => {
       if (modeRef.current !== 'audio') return;
-      // Chrome/Android pode emitir pause ao ir pra home — retomamos se a intenção era tocar
+      if (userPausedRef.current) {
+        setIsPlaying(false);
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'paused';
+        }
+        return;
+      }
+      // Chrome/Android pausa ao Home, recentes ou Voltar — retomar se o usuário não pausou
       if (wantPlayingRef.current) {
-        // Retomar tanto se a aba estiver oculta quanto logo após o pause do sistema
-        const tryResume = () => {
-          if (!wantPlayingRef.current || modeRef.current !== 'audio') return;
-          if (audio && audio.paused) {
-            void audio.play().catch(() => {});
-          }
-        };
-        tryResume();
-        setTimeout(tryResume, 80);
-        setTimeout(tryResume, 300);
-        setTimeout(tryResume, 800);
+        resumeAudioRef.current();
         return;
       }
       setIsPlaying(false);
@@ -473,6 +571,7 @@ export function usePlayer() {
   const playAudioStream = useCallback(async (item: MediaItem, startAt = 0) => {
     modeRef.current = 'audio';
     offlineModeRef.current = false;
+    userPausedRef.current = false;
     wantPlayingRef.current = true;
     ytRef.current?.pauseVideo();
     if (embedIframeRef.current) {
@@ -504,8 +603,8 @@ export function usePlayer() {
       // Prefetch no toque + espera curta: URL no cache antes do <audio> pedir bytes
       await warmStreamCache(item);
 
-      // Redirect CDN primeiro (rápido); proxy same-origin só se falhar
-      const sources = [getStreamUrl(item), getAudioProxyUrl(item)];
+      // Proxy same-origin no mobile (não para no Home/Voltar); CDN no desktop
+      const sources = getOnlineAudioSources(item);
       let lastErr: unknown;
 
       for (const src of sources) {
@@ -548,12 +647,14 @@ export function usePlayer() {
 
       if (currentTrack?.id === item.id) {
         if (isPlaying) {
+          userPausedRef.current = true;
           wantPlayingRef.current = false;
           if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
           else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
             sendEmbedCommand(embedIframeRef.current, 'pauseVideo');
           } else audioRef.current?.pause();
         } else {
+          userPausedRef.current = false;
           wantPlayingRef.current = true;
           if (modeRef.current === 'youtube') {
             ytRef.current?.playVideo();
@@ -576,6 +677,7 @@ export function usePlayer() {
       setIsBuffering(true);
       setIsPlaying(false);
       setError(null);
+      userPausedRef.current = false;
       wantPlayingRef.current = true;
       offlineModeRef.current = offline;
 
@@ -634,13 +736,15 @@ export function usePlayer() {
   );
 
   const pause = useCallback(() => {
+    userPausedRef.current = true;
     wantPlayingRef.current = false;
+    stopBgKeepAlive();
     closeMiniPlayerPip();
     if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
     else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
       sendEmbedCommand(embedIframeRef.current, 'pauseVideo');
     } else audioRef.current?.pause();
-  }, []);
+  }, [stopBgKeepAlive]);
 
   const lockProgress = useCallback((ms = 2500) => {
     progressLockUntil.current = Date.now() + ms;
@@ -671,6 +775,7 @@ export function usePlayer() {
       pause();
       return;
     }
+    userPausedRef.current = false;
     wantPlayingRef.current = true;
     if (modeRef.current === 'youtube') {
       ytRef.current?.playVideo();
@@ -687,6 +792,8 @@ export function usePlayer() {
 
   toggleRef.current = toggle;
   seekRef.current = seek;
+  resumeAudioRef.current = resumeAudioIfNeeded;
+  migrateEmbedRef.current = migrateEmbedToAudio;
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
@@ -759,6 +866,9 @@ export function usePlayer() {
   useEffect(() => {
     if (!('mediaSession' in navigator) || !currentTrack) return;
     if (!duration || !isFinite(duration) || duration <= 0) return;
+    const now = Date.now();
+    if (isPlaying && now - lastPositionSyncRef.current < 1000) return;
+    lastPositionSyncRef.current = now;
     try {
       navigator.mediaSession.setPositionState({
         duration,
@@ -770,107 +880,60 @@ export function usePlayer() {
     }
   }, [currentTrack, duration, progress, isPlaying]);
 
-  // Continuar tocando ao ir pra tela inicial / outro app / tela apagada
-  // Offline (HTMLAudio) deve se comportar como o YouTube: só para se o usuário pausar/fechar.
+  // Home / recentes / tela apagada: manter áudio (proxy same-origin + Media Session)
   useEffect(() => {
     if (!MOBILE) return;
 
-    const resumeOfflineAudio = () => {
-      if (!wantPlayingRef.current) return;
-      if (modeRef.current !== 'audio') return;
-      const audio = audioRef.current;
-      if (audio?.paused) {
-        void audio.play().catch(() => {});
+    const onBackground = () => {
+      if (!wantPlayingRef.current || userPausedRef.current) return;
+      syncMediaSessionPlaying();
+      startBgKeepAlive();
+
+      if (modeRef.current === 'youtube-embed' || modeRef.current === 'youtube') {
+        migrateEmbedRef.current();
+      } else {
+        resumeAudioRef.current();
+      }
+
+      const track = currentTrackRef.current;
+      if (track && modeRef.current === 'audio') {
+        void openMiniPlayerPip(track, isPlayingRef.current, {
+          onToggle: () => toggleRef.current(),
+        });
       }
     };
 
-    const resumeInBackground = () => {
-      if (!wantPlayingRef.current || bgResumeBusy.current) return;
-      const track = currentTrackRef.current;
-      if (!track) return;
-
-      // Offline / áudio nativo: só retomar (não redescarregar)
-      if (modeRef.current === 'audio') {
-        resumeOfflineAudio();
-        return;
-      }
-
-      // Embed online: tentar migrar para áudio nativo
-      if (modeRef.current === 'youtube-embed' || modeRef.current === 'youtube') {
-        bgResumeBusy.current = true;
-        const startAt = progressRef.current || 0;
-        const seekEmbed = embedIframeRef.current;
-        if (seekEmbed) {
-          sendEmbedCommand(seekEmbed, 'pauseVideo');
-        }
-        void (async () => {
-          try {
-            // Preferir blob offline se a faixa estiver baixada
-            const downloaded = await getDownloadedTrack(track.id);
-            if (downloaded?.blobUrl) {
-              modeRef.current = 'audio';
-              offlineModeRef.current = true;
-              if (embedIframeRef.current) {
-                embedIframeRef.current.remove();
-                embedIframeRef.current = null;
-              }
-              const audio = audioRef.current!;
-              audio.src = downloaded.blobUrl;
-              audio.load();
-              if (startAt > 0) {
-                try {
-                  audio.currentTime = startAt;
-                } catch {
-                  /* ignore */
-                }
-              }
-              await audio.play();
-              setIsPlaying(true);
-              return;
-            }
-            await playMobileAudioStreamRef.current(track, startAt);
-          } finally {
-            bgResumeBusy.current = false;
-          }
-        })();
-      }
+    const onForeground = () => {
+      stopBgKeepAlive();
+      if (!wantPlayingRef.current || userPausedRef.current) return;
+      resumeAudioRef.current();
     };
 
     const onVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        resumeOfflineAudio();
-        setTimeout(resumeInBackground, 120);
-        setTimeout(resumeInBackground, 500);
-        setTimeout(resumeInBackground, 1500);
-
-        const track = currentTrackRef.current;
-        if (track && wantPlayingRef.current && modeRef.current === 'audio') {
-          void openMiniPlayerPip(track, isPlayingRef.current, {
-            onToggle: () => toggleRef.current(),
-          });
-        }
-      }
+      if (document.visibilityState === 'hidden') onBackground();
+      else onForeground();
     };
 
-    const onPageHide = () => {
-      resumeOfflineAudio();
-      resumeInBackground();
-    };
-
+    const onPageHide = () => onBackground();
+    const onPageShow = () => onForeground();
     const onFreeze = () => {
-      resumeOfflineAudio();
-      resumeInBackground();
+      syncMediaSessionPlaying();
+      resumeAudioRef.current();
     };
 
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
     document.addEventListener('freeze', onFreeze);
+
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
       document.removeEventListener('freeze', onFreeze);
+      stopBgKeepAlive();
     };
-  }, []);
+  }, [startBgKeepAlive, stopBgKeepAlive, syncMediaSessionPlaying]);
 
   // Botão Voltar do Android fecha o PWA — manter na pilha enquanto toca
   useEffect(() => {
@@ -880,10 +943,7 @@ export function usePlayer() {
       if (!canBackGuard()) return;
       window.history.pushState({ spotMusicBg: true }, '');
       showBackHint();
-      const audio = audioRef.current;
-      if (audio?.paused && modeRef.current === 'audio') {
-        void audio.play().catch(() => {});
-      }
+      resumeAudioRef.current();
     };
 
     window.addEventListener('popstate', onPopState);

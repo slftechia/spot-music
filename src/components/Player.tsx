@@ -56,7 +56,7 @@ export default function Player({
     <>
       {isMobile && backHint && (
         <div className="fixed bottom-[118px] left-3 right-3 z-[60] rounded-lg bg-spotify-green text-black text-xs font-medium px-3 py-2 shadow-lg text-center">
-          Para continuar ouvindo, use o botão Início (◯) — não o Voltar. A música segue na notificação.
+          Para continuar ouvindo, use o botão Início (◯). Voltar e apps recentes podem pausar — controle pela notificação.
         </div>
       )}
       <footer

@@ -96,6 +96,13 @@ export function getAudioProxyUrl(item: MediaItem | string) {
   return `${API_BASE}/youtube/download/${id}`;
 }
 
+/** Mobile: proxy same-origin (não para no Home/Voltar). Desktop: redirect CDN primeiro. */
+export function getOnlineAudioSources(item: MediaItem | string): string[] {
+  const stream = getStreamUrl(item);
+  const proxy = getAudioProxyUrl(item);
+  return isMobileDevice() ? [proxy, stream] : [stream, proxy];
+}
+
 export function getDownloadUrl(item: MediaItem | string) {
   const id = typeof item === 'string' ? item : item.id;
   return `${API_BASE}/youtube/download/${id}`;
