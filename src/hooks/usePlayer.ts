@@ -110,8 +110,14 @@ export function usePlayer() {
   const isPlayingRef = useRef(false);
   const progressRef = useRef(0);
   const durationRef = useRef(0);
+  const wantPlayingRef = useRef(false);
+  const offlineModeRef = useRef(false);
+  const bgResumeBusy = useRef(false);
   const toggleRef = useRef<() => void>(() => {});
   const seekRef = useRef<(t: number) => void>(() => {});
+  const playMobileAudioStreamRef = useRef<(item: MediaItem, startAt?: number) => Promise<void>>(
+    async () => {}
+  );
 
   currentTrackRef.current = currentTrack;
   isPlayingRef.current = isPlaying;
@@ -166,6 +172,10 @@ export function usePlayer() {
         setError(null);
         startEmbedPoll();
       } else if (state === YT_STATE.PAUSED) {
+        // Sistema pausa o embed ao ir pra home — manter intenção e migrar para áudio
+        if (wantPlayingRef.current && document.visibilityState === 'hidden') {
+          return;
+        }
         setIsPlaying(false);
         setIsBuffering(false);
         stopEmbedPoll();
@@ -237,7 +247,13 @@ export function usePlayer() {
       }
     };
     const onPause = () => {
-      if (modeRef.current === 'audio') setIsPlaying(false);
+      if (modeRef.current !== 'audio') return;
+      // Chrome/Android pausa o áudio ao ir pra home — não trate como pause do usuário
+      if (wantPlayingRef.current && document.visibilityState === 'hidden') {
+        void audio.play().catch(() => {});
+        return;
+      }
+      setIsPlaying(false);
     };
     const onWaiting = () => {
       if (modeRef.current === 'audio') setIsBuffering(true);
@@ -376,8 +392,10 @@ export function usePlayer() {
     });
   }, [startEmbedPoll]);
 
-  const playMobileAudioStream = useCallback(async (item: MediaItem) => {
+  const playMobileAudioStream = useCallback(async (item: MediaItem, startAt = 0) => {
     modeRef.current = 'audio';
+    offlineModeRef.current = false;
+    wantPlayingRef.current = true;
     ytRef.current?.pauseVideo();
     if (embedIframeRef.current) {
       embedIframeRef.current.remove();
@@ -396,14 +414,15 @@ export function usePlayer() {
     try {
       await prepareStream(item).catch(() => {});
       await new Promise<void>((resolve, reject) => {
-        const onError = () => {
+        let settled = false;
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
           cleanup();
-          reject(new Error('audio-load'));
+          fn();
         };
-        const onReady = () => {
-          cleanup();
-          resolve();
-        };
+        const onError = () => finish(() => reject(new Error('audio-load')));
+        const onReady = () => finish(() => resolve());
         const cleanup = () => {
           audio.removeEventListener('error', onError);
           audio.removeEventListener('canplay', onReady);
@@ -414,21 +433,33 @@ export function usePlayer() {
         audio.addEventListener('loadeddata', onReady);
         audio.src = getAudioProxyUrl(item);
         audio.load();
-        // Timeout: Render/YouTube às vezes demora ou falha
         setTimeout(() => {
           if (audio.readyState >= 2) onReady();
           else onError();
         }, 12000);
       });
+
+      if (startAt > 0) {
+        try {
+          audio.currentTime = startAt;
+        } catch {
+          /* ignore */
+        }
+        setProgress(startAt);
+      }
+
       await audio.play();
+      setIsPlaying(true);
+      setIsBuffering(false);
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'playing';
       }
     } catch {
-      // Stream/API falhou → embed (menos ideal em background, mas toca)
       fallbackToEmbed();
     }
   }, [playMobileYoutube, stopEmbedPoll]);
+
+  playMobileAudioStreamRef.current = playMobileAudioStream;
 
   const play = useCallback(
     (item: MediaItem, offline = false) => {
@@ -436,20 +467,24 @@ export function usePlayer() {
 
       if (currentTrack?.id === item.id) {
         if (isPlaying) {
+          wantPlayingRef.current = false;
           if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
           else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
             sendEmbedCommand(embedIframeRef.current, 'pauseVideo');
           } else audioRef.current?.pause();
-        } else if (modeRef.current === 'youtube') {
-          ytRef.current?.playVideo();
-          setIsBuffering(true);
-          setError(null);
-        } else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
-          sendEmbedCommand(embedIframeRef.current, 'playVideo');
-          setIsPlaying(true);
-          setError(null);
         } else {
-          audioRef.current?.play();
+          wantPlayingRef.current = true;
+          if (modeRef.current === 'youtube') {
+            ytRef.current?.playVideo();
+            setIsBuffering(true);
+            setError(null);
+          } else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
+            sendEmbedCommand(embedIframeRef.current, 'playVideo');
+            setIsPlaying(true);
+            setError(null);
+          } else {
+            void audioRef.current?.play();
+          }
         }
         return;
       }
@@ -460,6 +495,8 @@ export function usePlayer() {
       setIsBuffering(true);
       setIsPlaying(false);
       setError(null);
+      wantPlayingRef.current = true;
+      offlineModeRef.current = offline;
 
       if (offline) {
         modeRef.current = 'audio';
@@ -480,6 +517,7 @@ export function usePlayer() {
               navigator.mediaSession.playbackState = 'playing';
             }
           } catch {
+            wantPlayingRef.current = false;
             setIsBuffering(false);
             setIsPlaying(false);
             setError('Faixa não encontrada offline.');
@@ -491,7 +529,7 @@ export function usePlayer() {
       audioRef.current?.pause();
 
       if (MOBILE) {
-        // Áudio nativo = background com Waze/tela apagada; embed só se o stream falhar
+        // Áudio nativo = background com home/Waze/tela apagada; embed só se o stream falhar
         void playMobileAudioStream(item);
         return;
       }
@@ -503,6 +541,7 @@ export function usePlayer() {
   );
 
   const pause = useCallback(() => {
+    wantPlayingRef.current = false;
     if (modeRef.current === 'youtube') ytRef.current?.pauseVideo();
     else if (modeRef.current === 'youtube-embed' && embedIframeRef.current) {
       sendEmbedCommand(embedIframeRef.current, 'pauseVideo');
@@ -538,6 +577,7 @@ export function usePlayer() {
       pause();
       return;
     }
+    wantPlayingRef.current = true;
     if (modeRef.current === 'youtube') {
       ytRef.current?.playVideo();
       setIsBuffering(true);
@@ -547,7 +587,7 @@ export function usePlayer() {
       setIsPlaying(true);
       setError(null);
     } else {
-      audioRef.current?.play();
+      void audioRef.current?.play();
     }
   }, [currentTrack, isPlaying, pause]);
 
@@ -636,18 +676,90 @@ export function usePlayer() {
     }
   }, [currentTrack, duration, progress, isPlaying]);
 
-  // Android: manter áudio offline ao minimizar / apagar tela (já via Media Session + HTMLAudioElement)
+  // Continuar tocando ao ir pra tela inicial / outro app / tela apagada
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState !== 'hidden') return;
-      if (!isPlayingRef.current) return;
-      // Garante que modo áudio não pause ao ir para background
-      if (modeRef.current === 'audio' && audioRef.current?.paused) {
-        void audioRef.current.play().catch(() => {});
+    if (!MOBILE) return;
+
+    const resumeInBackground = () => {
+      if (!wantPlayingRef.current || bgResumeBusy.current) return;
+      const track = currentTrackRef.current;
+      if (!track) return;
+
+      // Já em áudio nativo: só retomar se o sistema pausou
+      if (modeRef.current === 'audio') {
+        const audio = audioRef.current;
+        if (audio?.paused) {
+          void audio.play().catch(() => {});
+        }
+        return;
+      }
+
+      // Embed/YouTube: migrar para áudio nativo (único modo estável no background)
+      if (modeRef.current === 'youtube-embed' || modeRef.current === 'youtube') {
+        bgResumeBusy.current = true;
+        const startAt = progressRef.current || 0;
+        const seekEmbed = embedIframeRef.current;
+        if (seekEmbed) {
+          sendEmbedCommand(seekEmbed, 'pauseVideo');
+        }
+        void (async () => {
+          try {
+            if (offlineModeRef.current) {
+              const downloaded = await getDownloadedTrack(track.id);
+              if (downloaded?.blobUrl) {
+                modeRef.current = 'audio';
+                if (embedIframeRef.current) {
+                  embedIframeRef.current.remove();
+                  embedIframeRef.current = null;
+                }
+                const audio = audioRef.current!;
+                audio.src = downloaded.blobUrl;
+                audio.load();
+                if (startAt > 0) {
+                  try {
+                    audio.currentTime = startAt;
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                await audio.play();
+                setIsPlaying(true);
+                return;
+              }
+            }
+            await playMobileAudioStreamRef.current(track, startAt);
+          } finally {
+            bgResumeBusy.current = false;
+          }
+        })();
       }
     };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        // Pequeno atraso: Chrome às vezes dispara pause logo após hide
+        setTimeout(resumeInBackground, 120);
+        setTimeout(resumeInBackground, 500);
+        setTimeout(resumeInBackground, 1500);
+      }
+    };
+
+    const onPageHide = () => {
+      resumeInBackground();
+    };
+
+    const onFreeze = () => {
+      resumeInBackground();
+    };
+
     document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('freeze', onFreeze);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('freeze', onFreeze);
+    };
   }, []);
 
   const setVolumeLevel = useCallback((v: number) => {
