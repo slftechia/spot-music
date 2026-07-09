@@ -17,6 +17,7 @@ import {
 } from './services/offlineStorage';
 import type { MediaItem, View } from './types';
 import { needsPlaylistOpen, downloadBlockedReason, prefetchStream } from './services/api';
+import { saveRecentSearch } from './services/searchHistory';
 import { isMobileDevice } from './utils/device';
 import { requestPersistentStorage } from './services/persistentStorage';
 
@@ -113,9 +114,17 @@ export default function App() {
 
   const [pendingSearch, setPendingSearch] = useState<string | undefined>();
 
+  const [homeRefresh, setHomeRefresh] = useState(0);
+
   const handleSearchNavigate = (query: string) => {
+    saveRecentSearch(query);
     setPendingSearch(query);
     setView('search');
+  };
+
+  const handleViewChange = (next: View) => {
+    setView(next);
+    if (next === 'home') setHomeRefresh((k) => k + 1);
   };
 
   return (
@@ -139,7 +148,7 @@ export default function App() {
       />
       <Sidebar
         current={view}
-        onChange={setView}
+        onChange={handleViewChange}
         showInstall={install.canInstall}
         onInstall={install.install}
       />
@@ -157,6 +166,7 @@ export default function App() {
         <div className="p-6 md:p-8 max-w-5xl mx-auto">
           {view === 'home' && (
             <HomeView
+              key={homeRefresh}
               downloadedIds={downloadedIds}
               downloadingId={downloadingId}
               downloadProgress={downloadProgress}
@@ -195,7 +205,7 @@ export default function App() {
 
       <MobileNav
         current={view}
-        onChange={setView}
+        onChange={handleViewChange}
         showInstall={install.canInstall}
         onInstall={install.install}
       />

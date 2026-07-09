@@ -1,31 +1,12 @@
 import { Clock, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { getSearchSuggestions } from '../services/api';
+import { loadRecentSearches, saveRecentSearch } from '../services/searchHistory';
 
 interface Props {
   onSearch: (query: string) => void;
   placeholder?: string;
   initialQuery?: string;
-}
-
-const RECENT_KEY = 'spot-music-recent-searches';
-const MAX_RECENT = 5;
-
-function loadRecent(): string[] {
-  try {
-    const raw = localStorage.getItem(RECENT_KEY);
-    return raw ? (JSON.parse(raw) as string[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveRecent(query: string) {
-  const trimmed = query.trim();
-  if (!trimmed) return;
-  const list = loadRecent().filter((q) => q.toLowerCase() !== trimmed.toLowerCase());
-  list.unshift(trimmed);
-  localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, MAX_RECENT)));
 }
 
 function highlightMatch(text: string, query: string) {
@@ -64,8 +45,8 @@ export default function SearchBar({
     (value: string) => {
       const trimmed = value.trim();
       if (!trimmed) return;
-      saveRecent(trimmed);
-      setRecent(loadRecent());
+      saveRecentSearch(trimmed);
+      setRecent(loadRecentSearches());
       setQuery(trimmed);
       setOpen(false);
       setActiveIndex(-1);
@@ -75,7 +56,7 @@ export default function SearchBar({
   );
 
   useEffect(() => {
-    setRecent(loadRecent());
+    setRecent(loadRecentSearches());
   }, []);
 
   useEffect(() => {
