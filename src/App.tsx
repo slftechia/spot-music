@@ -99,8 +99,8 @@ export default function App() {
       const msg = err instanceof Error && err.message === 'DOWNLOAD_TOO_LONG'
         ? downloadBlockedReason(item)
         : isMobileDevice()
-          ? 'Download falhou. Tente outra música (até 20 min).'
-          : 'Erro ao baixar. Tente outra música.';
+          ? 'Download falhou. Tente outra música (até 20 min) ou baixe no PC e importe a biblioteca.'
+          : 'Erro ao baixar. Rode o app no PC (npm run dev:all) ou tente outra música.';
       alert(msg);
     } finally {
       setDownloadingId(null);
@@ -234,6 +234,7 @@ export default function App() {
         onSeekStart={player.seekStart}
         onSeekEnd={player.seekEnd}
         onVolumeChange={player.setVolume}
+        onOpenYoutube={player.openInYoutube}
       />
     </div>
   );

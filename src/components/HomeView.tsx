@@ -72,7 +72,7 @@ export default function HomeView({
         />
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight leading-none">Spot Music</h1>
-          <p className="text-xs text-spotify-light mt-1">Catálogo Audius — grátis, sem YouTube</p>
+          <p className="text-xs text-spotify-light mt-1">Ouça, baixe e leve na viagem</p>
         </div>
       </header>
 

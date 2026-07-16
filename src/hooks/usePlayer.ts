@@ -16,8 +16,10 @@ import {
   updateMiniPlayerPip,
 } from '../utils/miniPlayerPip';
 import {
+  buildEmbedUrl,
   parseEmbedMessage,
   sendEmbedCommand,
+  startEmbedListening,
   YT_STATE,
 } from '../utils/youtubeEmbed';
 
@@ -98,6 +100,22 @@ export function loadYouTubeAPI() {
     }
   });
   return ytApiPromise;
+}
+
+function mountMobileEmbed(videoId: string): HTMLIFrameElement | null {
+  const host = document.getElementById('yt-embed-host');
+  if (!host) return null;
+
+  host.replaceChildren();
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture; fullscreen');
+  iframe.setAttribute('allowfullscreen', 'true');
+  iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+  iframe.title = 'YouTube player';
+  iframe.className = 'absolute inset-0 w-full h-full border-0';
+  iframe.src = buildEmbedUrl(videoId, true);
+  host.appendChild(iframe);
+  return iframe;
 }
 
 export function usePlayer() {
@@ -544,10 +562,39 @@ export function usePlayer() {
     const timeout = MOBILE ? BUFFERING_TIMEOUT_MOBILE_MS : BUFFERING_TIMEOUT_MS;
     const timer = setTimeout(() => {
       setIsBuffering(false);
-      setError('Não iniciou. Toque play de novo.');
+      setError('Não iniciou. Toque play de novo ou abra no YouTube.');
     }, timeout);
     return () => clearTimeout(timer);
   }, [isBuffering, isPlaying, currentTrack?.id]);
+
+  const playDesktopYoutube = useCallback((videoId: string) => {
+    if (!ytRef.current || !ytReady.current) {
+      setError('Player carregando. Toque de novo.');
+      setIsBuffering(false);
+      return;
+    }
+    ytRef.current.loadVideoById(videoId);
+    ytRef.current.playVideo();
+  }, []);
+
+  const playMobileYoutube = useCallback((videoId: string) => {
+    const iframe = mountMobileEmbed(videoId);
+    if (!iframe) {
+      setError('Erro ao iniciar player.');
+      setIsBuffering(false);
+      return;
+    }
+
+    embedIframeRef.current = iframe;
+    iframe.addEventListener('load', () => {
+      startEmbedListening(iframe);
+      sendEmbedCommand(iframe, 'setVolume', [volumeRef.current]);
+      sendEmbedCommand(iframe, 'playVideo');
+      setIsBuffering(false);
+      setIsPlaying(true);
+      startEmbedPoll();
+    });
+  }, [startEmbedPoll]);
 
   const playAudioStream = useCallback(async (item: MediaItem, startAt = 0) => {
     modeRef.current = 'audio';
@@ -562,90 +609,140 @@ export function usePlayer() {
     stopEmbedPoll();
 
     const audio = audioRef.current!;
+    const fallbackToYoutube = () => {
+      if (MOBILE) {
+        modeRef.current = 'youtube-embed';
+        setError(null);
+        setIsBuffering(true);
+        playMobileYoutube(item.id);
+        return;
+      }
+      modeRef.current = 'youtube';
+      setError(null);
+      setIsBuffering(true);
+      playDesktopYoutube(item.id);
+    };
 
     try {
       setError(null);
       setIsBuffering(true);
       setIsPlaying(false);
+
+      // Prepara servidor (Render) mas não espera mais que 4s — senão vai direto pro embed
+      await Promise.race([
+        warmStreamCache(item, 12000),
+        new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+      ]);
       applyMediaSession(item, true);
 
-      onlineBlobAbortRef.current?.abort();
-      const ac = new AbortController();
-      onlineBlobAbortRef.current = ac;
+      if (MOBILE) {
+        onlineBlobAbortRef.current?.abort();
+        const ac = new AbortController();
+        onlineBlobAbortRef.current = ac;
 
-      // Prefetch blob em paralelo (estável com tela apagada / Waze)
-      void prefetchOnlineBlob(item, { signal: ac.signal })
-        .then(async (blobUrl) => {
-          if (!wantPlayingRef.current || ac.signal.aborted) return;
-          if (currentTrackRef.current?.id !== item.id) return;
-          if (modeRef.current !== 'audio' || !audioRef.current) return;
-          if (memoryBlobRef.current) return;
-          memoryBlobRef.current = true;
-          await swapAudioToBlob(audioRef.current, blobUrl, !userPausedRef.current);
-          setIsPlaying(!audioRef.current.paused);
-        })
-        .catch(() => {});
+        const scheduleBlobUpgrade = () => {
+          void prefetchOnlineBlob(item, { signal: ac.signal })
+            .then(async (blobUrl) => {
+              if (!wantPlayingRef.current || ac.signal.aborted) return;
+              if (currentTrackRef.current?.id !== item.id) return;
+              const a = audioRef.current;
+              if (!a) return;
 
-      void warmStreamCache(item, 2000);
+              if (modeRef.current === 'youtube-embed') {
+                const pos = progressRef.current || 0;
+                stopEmbedPoll();
+                if (embedIframeRef.current) {
+                  embedIframeRef.current.remove();
+                  embedIframeRef.current = null;
+                }
+                modeRef.current = 'audio';
+                memoryBlobRef.current = true;
+                offlineModeRef.current = false;
+                a.src = blobUrl;
+                a.load();
+                if (pos > 0) {
+                  try {
+                    a.currentTime = pos;
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                await a.play();
+                setIsPlaying(true);
+                setIsBuffering(false);
+              } else if (modeRef.current === 'audio' && !memoryBlobRef.current) {
+                memoryBlobRef.current = true;
+                await swapAudioToBlob(a, blobUrl, !userPausedRef.current);
+                setIsPlaying(!a.paused);
+              }
+            })
+            .catch(() => {});
+        };
 
-      // Audius: proxy same-origin primeiro — rápido e estável
-      for (const src of getOnlineAudioSources(item)) {
-        const ok = await tryAudioSource(audio, src, startAt, 10000);
-        if (ok && wantPlayingRef.current && !ac.signal.aborted) {
+        scheduleBlobUpgrade();
+
+        for (const src of getOnlineAudioSources(item)) {
+          const ok = await tryAudioSource(audio, src, startAt, 8000);
+          if (ok && wantPlayingRef.current && !ac.signal.aborted) {
+            modeRef.current = 'audio';
+            memoryBlobRef.current = false;
+            offlineModeRef.current = false;
+            setIsPlaying(true);
+            setIsBuffering(false);
+            setError(null);
+            if ('mediaSession' in navigator) {
+              navigator.mediaSession.playbackState = 'playing';
+            }
+            return;
+          }
+          audio.removeAttribute('src');
+          audio.load();
+        }
+
+        // Áudio falhou — embed YouTube toca na hora; blob upgrade quando pronto
+        fallbackToYoutube();
+        return;
+      }
+
+      memoryBlobRef.current = false;
+
+      // Desktop (ou fallback mobile): stream HTTP
+      const sources = getOnlineAudioSources(item);
+      let lastErr: unknown;
+
+      for (const src of sources) {
+        try {
           modeRef.current = 'audio';
-          memoryBlobRef.current = false;
-          offlineModeRef.current = false;
+          audio.src = src;
+          audio.load();
+          if (startAt > 0) {
+            try {
+              audio.currentTime = startAt;
+            } catch {
+              /* ignore */
+            }
+            setProgress(startAt);
+          }
+
+          await audio.play();
           setIsPlaying(true);
           setIsBuffering(false);
-          setError(null);
           if ('mediaSession' in navigator) {
             navigator.mediaSession.playbackState = 'playing';
           }
           return;
+        } catch (err) {
+          lastErr = err;
+          audio.removeAttribute('src');
+          audio.load();
         }
-        audio.removeAttribute('src');
-        audio.load();
       }
 
-      // Último recurso: esperar blob completo
-      try {
-        const blobUrl = await prefetchOnlineBlob(item, { signal: ac.signal });
-        if (!wantPlayingRef.current || ac.signal.aborted) return;
-        modeRef.current = 'audio';
-        memoryBlobRef.current = true;
-        offlineModeRef.current = false;
-        audio.src = blobUrl;
-        audio.load();
-        if (startAt > 0) {
-          try {
-            audio.currentTime = startAt;
-          } catch {
-            /* ignore */
-          }
-          setProgress(startAt);
-        }
-        await audio.play();
-        setIsPlaying(true);
-        setIsBuffering(false);
-        if ('mediaSession' in navigator) {
-          navigator.mediaSession.playbackState = 'playing';
-        }
-        return;
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-      }
-
-      setIsBuffering(false);
-      setIsPlaying(false);
-      setError('Não foi possível tocar. Tente outra faixa.');
-      wantPlayingRef.current = false;
+      throw lastErr || new Error('audio-load');
     } catch {
-      setIsBuffering(false);
-      setIsPlaying(false);
-      setError('Erro ao tocar. Tente de novo.');
-      wantPlayingRef.current = false;
+      fallbackToYoutube();
     }
-  }, []);
+  }, [playDesktopYoutube, playMobileYoutube, stopEmbedPoll]);
 
   playMobileAudioStreamRef.current = playAudioStream;
 
@@ -998,10 +1095,9 @@ export function usePlayer() {
     setVolume(Math.round(v * 100));
   }, []);
 
-  const openTrackPage = useCallback(() => {
+  const openInYoutube = useCallback(() => {
     if (!currentTrack) return;
-    // Sem página externa obrigatória — foco no player local
-    setError(null);
+    window.open(`https://www.youtube.com/watch?v=${currentTrack.id}`, '_blank', 'noopener');
   }, [currentTrack]);
 
   return {
@@ -1020,7 +1116,7 @@ export function usePlayer() {
     seekStart,
     seekEnd,
     toggle,
-    openInYoutube: openTrackPage,
+    openInYoutube,
     backHint,
   };
 }

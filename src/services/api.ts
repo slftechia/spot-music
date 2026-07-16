@@ -3,10 +3,10 @@ import { isMobileDevice } from '../utils/device';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
-/** PC: mixes longos para exportar. Celular: até 20 min. */
+/** PC: mixes longos para exportar. Celular: até 20 min (como antes). */
 export const MAX_DOWNLOAD_SECONDS_DESKTOP = 3 * 60 * 60;
 export const MAX_DOWNLOAD_SECONDS_MOBILE = 20 * 60;
-/** @deprecated Use getMaxDownloadSeconds() */
+/** @deprecated Use getMaxDownloadSeconds() — mantido para imports existentes. */
 export const MAX_DOWNLOAD_SECONDS = MAX_DOWNLOAD_SECONDS_MOBILE;
 export const DOWNLOADS_ENABLED = true;
 
@@ -38,7 +38,7 @@ export async function getTrending() {
 }
 
 export async function getPlaylistItems(playlistId: string) {
-  const res = await fetch(`${API_BASE}/playlist/${playlistId}`);
+  const res = await fetch(`${API_BASE}/youtube/playlist/${playlistId}`);
   if (!res.ok) throw new Error('Falha ao carregar playlist');
   const data = await res.json();
   return data.data as MediaItem[];
@@ -46,7 +46,7 @@ export async function getPlaylistItems(playlistId: string) {
 
 export async function prepareStream(item: MediaItem | string): Promise<void> {
   const id = typeof item === 'string' ? item : item.id;
-  const res = await fetch(`${API_BASE}/prepare/${id}`);
+  const res = await fetch(`${API_BASE}/youtube/prepare/${id}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.message || 'Falha ao preparar áudio');
@@ -72,7 +72,8 @@ export function prefetchStream(item: MediaItem | string) {
   void job.catch(() => {});
 }
 
-export async function warmStreamCache(item: MediaItem | string, maxWaitMs = 1500) {
+/** Aguarda prepare com teto — usado no play para não bloquear demais */
+export async function warmStreamCache(item: MediaItem | string, maxWaitMs = 2200) {
   prefetchStream(item);
   const id = typeof item === 'string' ? item : item.id;
   const job = prepareInflight.get(id);
@@ -86,22 +87,25 @@ export async function warmStreamCache(item: MediaItem | string, maxWaitMs = 1500
 
 export function getStreamUrl(item: MediaItem | string) {
   const id = typeof item === 'string' ? item : item.id;
-  return `${API_BASE}/stream/${id}`;
+  return `${API_BASE}/youtube/stream/${id}`;
 }
 
-/** Proxy same-origin — melhor para <audio> + Media Session / background / offline */
+/** Proxy same-origin — melhor para <audio> com Media Session / background */
 export function getAudioProxyUrl(item: MediaItem | string) {
   const id = typeof item === 'string' ? item : item.id;
-  return `${API_BASE}/download/${id}`;
+  return `${API_BASE}/youtube/download/${id}`;
 }
 
-/** Mobile e desktop: proxy first (estável), redirect como fallback */
+/** Mobile: proxy same-origin (não para no Home/Voltar). Desktop: redirect CDN primeiro. */
 export function getOnlineAudioSources(item: MediaItem | string): string[] {
-  return [getAudioProxyUrl(item), getStreamUrl(item)];
+  const stream = getStreamUrl(item);
+  const proxy = getAudioProxyUrl(item);
+  return isMobileDevice() ? [proxy, stream] : [stream, proxy];
 }
 
 export function getDownloadUrl(item: MediaItem | string) {
-  return getAudioProxyUrl(item);
+  const id = typeof item === 'string' ? item : item.id;
+  return `${API_BASE}/youtube/download/${id}`;
 }
 
 export function canDownload(item: MediaItem) {
@@ -113,7 +117,7 @@ export function downloadBlockedReason(item: MediaItem) {
   if (!canDownload(item)) {
     const max = getMaxDownloadSeconds();
     if (max < 3600) {
-      return `No celular o limite é ${Math.round(max / 60)} min. Ouça online.`;
+      return `No celular o limite é ${Math.round(max / 60)} min. Ouça online ou baixe no PC e importe.`;
     }
     return `Muito longo para baixar (máx. ${Math.round(max / 3600)}h). Ouça online.`;
   }

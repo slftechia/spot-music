@@ -1,6 +1,6 @@
 export type MediaType = 'video' | 'compilation' | 'playlist' | 'album' | 'track';
 export type MediaSource = 'youtube' | 'audius';
-export type SearchFilter = 'all' | 'tracks' | 'compilations';
+export type SearchFilter = 'all' | 'videos' | 'compilations' | 'playlists' | 'albums';
 
 export interface MediaItem {
   id: string;
@@ -15,7 +15,6 @@ export interface MediaItem {
   videoCount?: number;
   playlistId?: string;
   description?: string;
-  downloadable?: boolean;
 }
 
 /** @deprecated Use MediaItem */
@@ -36,13 +35,15 @@ export interface HomeGenreSection {
 
 export const FILTER_LABELS: Record<SearchFilter, string> = {
   all: 'Tudo',
-  tracks: 'Músicas',
-  compilations: 'Longas',
+  videos: 'Vídeos',
+  compilations: 'Compilações',
+  playlists: 'Playlists',
+  albums: 'Álbuns',
 };
 
 export const TYPE_LABELS: Record<MediaType, string> = {
-  video: 'Faixa',
-  compilation: 'Longa',
+  video: 'Vídeo',
+  compilation: 'Compilação',
   playlist: 'Playlist',
   album: 'Álbum',
   track: 'Música',

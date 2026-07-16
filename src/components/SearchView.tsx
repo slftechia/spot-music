@@ -19,7 +19,7 @@ interface Props {
   onCancelDownload?: () => void;
 }
 
-const FILTERS: SearchFilter[] = ['all', 'tracks', 'compilations'];
+const FILTERS: SearchFilter[] = ['all', 'videos', 'compilations', 'playlists', 'albums'];
 
 export default function SearchView({
   downloadedIds,
@@ -85,7 +85,7 @@ export default function SearchView({
       <h2 className="text-2xl font-bold">Buscar</h2>
       <SearchBar
         onSearch={(q) => handleSearch(q)}
-        placeholder="Electronic, hip hop, rock, artist..."
+        placeholder="Sertanejo 2026, mix, playlist..."
         initialQuery={initialQuery}
       />
 
@@ -135,7 +135,7 @@ export default function SearchView({
 
       {!loading && !searched && (
         <p className="text-spotify-light text-center py-12">
-          Busque músicas no catálogo Audius — streaming gratuito, sem YouTube.
+          Busque compilações, playlists, álbuns ou músicas — como no YouTube.
         </p>
       )}
     </div>
